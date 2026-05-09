@@ -446,7 +446,7 @@ export default function AdminDashboard() {
         <div className="p-8 border-b border-white/10 flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-gold-metallic flex items-center justify-center text-maroon-dark font-display text-xl">SA</div>
           <div>
-            <h1 className="font-bold text-sm tracking-widest uppercase">Kalyanam</h1>
+            <h1 className="font-bold text-sm tracking-widest uppercase">Sandeep and Anand Wedding</h1>
             <p className="text-[10px] text-ivory/40 uppercase tracking-tighter">Admin Portal</p>
           </div>
           <button className="lg:hidden ml-auto text-ivory/60" onClick={() => setIsSidebarOpen(false)}>
@@ -521,7 +521,7 @@ export default function AdminDashboard() {
                  </button>
                  <div>
                     <h2 className="text-xl md:text-3xl font-bold text-gray-800 capitalize">{activeTab}</h2>
-                    <p className="text-xs md:text-sm text-gray-500">Kalyanam Website Control Center</p>
+                    <p className="text-xs md:text-sm text-gray-500">Sandeep and Anand Wedding Control Center</p>
                  </div>
               </div>
               <div className="flex items-center gap-3 md:hidden">

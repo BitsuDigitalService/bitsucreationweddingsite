@@ -44,7 +44,7 @@ export default function Footer() {
           <div className="flex items-center gap-2 text-ivory/40 uppercase tracking-[0.3em] text-[10px]">
             Made with <Heart size={10} className="text-red-500 fill-red-500" /> for the lovely couples
           </div>
-          <p className="text-gold-metallic/30 text-[10px] tracking-widest uppercase">© 2026 Kalyanam Royale. All Rights Reserved.</p>
+          <p className="text-gold-metallic/30 text-[10px] tracking-widest uppercase">© 2026 Sandeep and Anand Wedding. All Rights Reserved.</p>
           
           <div className="mt-6 flex flex-col items-center gap-3 opacity-60 hover:opacity-100 transition-opacity cursor-pointer">
             <span className="text-[9px] tracking-[0.3em] uppercase text-ivory/40 font-bold">By</span>

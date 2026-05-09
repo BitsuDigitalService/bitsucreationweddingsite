@@ -46,6 +46,94 @@ const DEFAULT_TEMPLATES = [
   }
 ];
 
+type PrintLayout = '1' | '4' | '6' | '8';
+type DuplexMode = 'long-edge' | 'short-edge';
+type SheetSide = 'front' | 'back';
+
+interface PrintLayoutSpec {
+  count: number;
+  cols: number;
+  rows: number;
+  tagW: number;
+  tagH: number;
+  spacingX: number;
+  spacingY: number;
+  isLandscape: boolean;
+}
+
+interface PagePlacement {
+  x: number;
+  y: number;
+  sourceIndex: number;
+}
+
+const getPrintLayoutSpec = (layout: PrintLayout): PrintLayoutSpec => {
+  if (layout === '1') {
+    return { count: 1, cols: 1, rows: 1, tagW: 70, tagH: 100, spacingX: 0, spacingY: 0, isLandscape: false };
+  }
+
+  if (layout === '4') {
+    return { count: 4, cols: 2, rows: 2, tagW: 70, tagH: 100, spacingX: 20, spacingY: 20, isLandscape: false };
+  }
+
+  if (layout === '6') {
+    return { count: 6, cols: 2, rows: 3, tagW: 70, tagH: 100, spacingX: 10, spacingY: 10, isLandscape: false };
+  }
+
+  return { count: 8, cols: 4, rows: 2, tagW: 72, tagH: 103, spacingX: 1.5, spacingY: 2.5, isLandscape: true };
+};
+
+const getA4PageSize = (isLandscape: boolean) => ({
+  width: isLandscape ? 297 : 210,
+  height: isLandscape ? 210 : 297
+});
+
+const getPlacementStart = (spec: PrintLayoutSpec, pageWidth: number, pageHeight: number) => {
+  const totalGridW = (spec.cols * spec.tagW) + ((spec.cols - 1) * spec.spacingX);
+  const totalGridH = (spec.rows * spec.tagH) + ((spec.rows - 1) * spec.spacingY);
+
+  return {
+    startX: (pageWidth - totalGridW) / 2,
+    startY: (pageHeight - totalGridH) / 2,
+    totalGridW,
+    totalGridH
+  };
+};
+
+const getPagePlacement = (
+  index: number,
+  side: SheetSide,
+  spec: PrintLayoutSpec,
+  duplexMode: DuplexMode,
+  pageWidth: number,
+  pageHeight: number,
+  backOffsetX: number,
+  backOffsetY: number
+): PagePlacement => {
+  const col = index % spec.cols;
+  const row = Math.floor(index / spec.cols);
+  let printCol = col;
+  let printRow = row;
+
+  if (side === 'back') {
+    if (duplexMode === 'long-edge') {
+      printCol = spec.cols - 1 - col;
+    } else {
+      printRow = spec.rows - 1 - row;
+    }
+  }
+
+  const { startX, startY } = getPlacementStart(spec, pageWidth, pageHeight);
+  const offsetX = side === 'back' ? backOffsetX : 0;
+  const offsetY = side === 'back' ? backOffsetY : 0;
+
+  return {
+    x: startX + printCol * (spec.tagW + spec.spacingX) + offsetX,
+    y: startY + printRow * (spec.tagH + spec.spacingY) + offsetY,
+    sourceIndex: index
+  };
+};
+
 export default function TagDesigner({ onSave }: TagDesignerProps) {
   const [activeSide, setActiveSide] = useState<'front' | 'back'>('front');
   const [viewMode, setViewMode] = useState<'editor' | 'preview'>('editor');
@@ -57,8 +145,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [printLayout, setPrintLayout] = useState<'1' | '4' | '6' | '8'>('8');
-  const [duplexMode, setDuplexMode] = useState<'long-edge' | 'short-edge'>('long-edge');
   const [showPrintDebug, setShowPrintDebug] = useState(false);
   
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -67,10 +153,65 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
   
   const [tagNumber, setTagNumber] = useState<number>(100);
   const [tagId, setTagId] = useState('100');
-  const [activeTemplate, setActiveTemplate] = useState(DEFAULT_TEMPLATES[0]);
+  
+  // Persistent State Initialization
+  const [activeTemplate, setActiveTemplate] = useState(() => {
+    const saved = localStorage.getItem('kalyanam_active_template');
+    return saved ? JSON.parse(saved) : DEFAULT_TEMPLATES[0];
+  });
+
+  const [backOffsetX, setBackOffsetX] = useState(() => {
+    const saved = localStorage.getItem('kalyanam_back_offset_x');
+    return saved ? parseFloat(saved) : 0;
+  });
+
+  const [backOffsetY, setBackOffsetY] = useState(() => {
+    const saved = localStorage.getItem('kalyanam_back_offset_y');
+    return saved ? parseFloat(saved) : 0;
+  });
+
+  const [printLayout, setPrintLayout] = useState<PrintLayout>(() => {
+    return (localStorage.getItem('kalyanam_print_layout') as any) || '8';
+  });
+
+  const [duplexMode, setDuplexMode] = useState<DuplexMode>(() => {
+    return (localStorage.getItem('kalyanam_duplex_mode') as any) || 'long-edge';
+  });
+
+  const [previewZoom, setPreviewZoom] = useState(() => {
+    const saved = localStorage.getItem('kalyanam_preview_zoom');
+    return saved ? parseFloat(saved) : 0.8;
+  });
+
   const [customTemplates, setCustomTemplates] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState<{ front: boolean, back: boolean }>({ front: false, back: false });
+  const [qrBaseUrl, setQrBaseUrl] = useState(window.location.origin + '/bags/');
   const isMounted = useRef(true);
+
+  // Persistence Syncing
+  useEffect(() => {
+    localStorage.setItem('kalyanam_active_template', JSON.stringify(activeTemplate));
+  }, [activeTemplate]);
+
+  useEffect(() => {
+    localStorage.setItem('kalyanam_back_offset_x', backOffsetX.toString());
+  }, [backOffsetX]);
+
+  useEffect(() => {
+    localStorage.setItem('kalyanam_back_offset_y', backOffsetY.toString());
+  }, [backOffsetY]);
+
+  useEffect(() => {
+    localStorage.setItem('kalyanam_print_layout', printLayout);
+  }, [printLayout]);
+
+  useEffect(() => {
+    localStorage.setItem('kalyanam_duplex_mode', duplexMode);
+  }, [duplexMode]);
+
+  useEffect(() => {
+    localStorage.setItem('kalyanam_preview_zoom', previewZoom.toString());
+  }, [previewZoom]);
 
   // Canvas dimensions for the tag (scaled for screen, roughly 70x100mm ratio)
   const TAG_WIDTH = 350;
@@ -127,6 +268,28 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
 
   const isLoadingTemplate = useRef(false);
 
+  // Keep QR code updated
+  useEffect(() => {
+    const updateQR = async (canvas: fabric.Canvas | null) => {
+      if (!canvas) return;
+      const qrObj = canvas.getObjects().find(obj => (obj as any).name === 'qr-code') as fabric.FabricImage;
+      if (qrObj) {
+        try {
+          const url = qrBaseUrl + tagId;
+          const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 512 });
+          const img = await fabric.FabricImage.fromURL(qrDataUrl);
+          qrObj.setElement(img.getElement());
+          canvas.renderAll();
+        } catch (err) {
+          console.error('Failed to update QR:', err);
+        }
+      }
+    };
+    updateQR(frontCanvas);
+    updateQR(backCanvas);
+  }, [qrBaseUrl, tagId, frontCanvas, backCanvas]);
+
+  // Initialize canvas
   useEffect(() => {
     if (!frontCanvasRef.current || !backCanvasRef.current) return;
 
@@ -471,7 +634,7 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
   const addQRToCanvas = async (canvas: fabric.Canvas, forcedId?: string) => {
     try {
       const idToUse = forcedId || tagId;
-      const url = idToUse;
+      const url = qrBaseUrl + idToUse;
       const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 512 });
       const img = await fabric.FabricImage.fromURL(qrDataUrl);
       img.set({
@@ -492,84 +655,77 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
     }
   };
 
-  const PrintSheetPreview = ({ side, layout, frontImg, backImg, overlay = false }: { side: 'front' | 'back' | 'overlay', layout: '1' | '4' | '6' | '8', frontImg: string, backImg: string, overlay?: boolean }) => {
-    const isLandscape = layout === '8';
-    const counts = parseInt(layout);
-    
-    // Grid settings
-    let cols = 2;
-    if (layout === '1') cols = 1;
-    if (layout === '8') cols = 4;
-    
-    const rowsNum = Math.ceil(counts / cols);
-    const items = Array.from({ length: counts });
-    
+  const PrintSheetPreview = ({ side, layout, frontImg, backImg, overlay = false }: { side: 'front' | 'back' | 'overlay', layout: PrintLayout, frontImg: string, backImg: string, overlay?: boolean }) => {
+    const spec = getPrintLayoutSpec(layout);
+    const page = getA4PageSize(spec.isLandscape);
+    const placements = Array.from({ length: spec.count }, (_, index) => ({
+      front: getPagePlacement(index, 'front', spec, duplexMode, page.width, page.height, backOffsetX, backOffsetY),
+      back: getPagePlacement(index, 'back', spec, duplexMode, page.width, page.height, backOffsetX, backOffsetY)
+    }));
+
+    const sheetClass = spec.isLandscape ? 'w-[620px] h-[440px]' : 'w-[420px] h-[594px]';
+    const boxClass = layout === '1' ? 'text-[6px]' : layout === '8' ? 'text-[5px]' : 'text-[5px]';
+    const toStyle = (placement: PagePlacement) => ({
+      left: `${(placement.x / page.width) * 100}%`,
+      top: `${(placement.y / page.height) * 100}%`,
+      width: `${(spec.tagW / page.width) * 100}%`,
+      height: `${(spec.tagH / page.height) * 100}%`
+    });
+
     return (
       <div className="relative group cursor-pointer" onClick={() => setViewMode('editor')}>
-        <div className={`bg-white shadow-2xl overflow-hidden relative border border-gray-200 transition-all ${isLandscape ? 'w-[620px] h-[440px]' : 'w-[420px] h-[594px]'}`}>
+        <div className={`bg-white shadow-2xl overflow-hidden relative border border-gray-200 transition-all ${sheetClass}`}>
            {/* A4 Info overlay */}
            <div className="absolute top-2 left-4 z-20">
               <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
-                {side === 'overlay' ? 'ALIGNMENT OVERLAY' : `${side.toUpperCase()} SHEET`} - A4 {isLandscape ? 'LANDSCAPE' : 'PORTRAIT'}
+                {side === 'overlay' ? 'ALIGNMENT OVERLAY (hold to light)' : `${side.toUpperCase()} SHEET`} - A4 {spec.isLandscape ? 'LANDSCAPE' : 'PORTRAIT'}
               </span>
            </div>
-           
-           <div className={`grid gap-1 p-3 h-full place-items-center ${cols === 4 ? 'grid-cols-4' : (cols === 2 ? 'grid-cols-2' : 'grid-cols-1')}`}>
-              {items.map((_, i) => {
-                 const col = i % cols;
-                 const row = Math.floor(i / cols);
-                 
-                 // Determine back col/row based on duplex mode
-                 let backCol = col;
-                 let backRow = row;
-                 
-                 if (duplexMode === 'long-edge') {
-                   // Mirror horizontally (columns)
-                   backCol = cols - 1 - col;
-                 } else {
-                   // Mirror vertically (rows)
-                   backRow = rowsNum - 1 - row;
-                 }
-                 
-                 const backIndex = backRow * cols + backCol;
-                 
-                 return (
-                  <div key={i} className={`relative shadow-sm border ${showPrintDebug ? 'border-red-400/50' : 'border-gray-50'} flex items-center justify-center overflow-hidden bg-gray-50 ${layout === '1' ? 'w-[240px] h-[340px]' : layout === '8' ? 'w-[145px] h-[200px]' : 'w-[160px] h-[220px]'}`}>
-                     {side === 'overlay' ? (
-                        <>
-                           <img src={frontImg} className="absolute inset-0 w-full h-full object-contain" alt="front tag" />
-                           <img src={backImg} className="absolute inset-0 w-full h-full object-contain opacity-50 mix-blend-multiply" alt="back tag" />
-                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                              {showPrintDebug && (
-                                <>
-                                  <div className="w-full h-[1px] bg-red-500/50 absolute top-1/2"></div>
-                                  <div className="h-full w-[1px] bg-red-500/50 absolute left-1/2"></div>
-                                </>
-                              )}
-                           </div>
-                        </>
-                     ) : (
-                        <>
-                           <img 
-                            src={side === 'front' ? frontImg : backImg} 
-                            className="w-full h-full object-contain" 
-                            alt="tag preview" 
-                           />
-                           <div className="absolute bottom-0.5 right-1">
-                              <span className="text-[5px] text-gray-400 font-mono">
-                                #{side === 'front' ? tagNumber + i : tagNumber + backIndex}
-                              </span>
-                           </div>
-                        </>
-                     )}
-                     
-                     {showPrintDebug && (
-                       <div className="absolute inset-1 border border-dashed border-blue-400/30 pointer-events-none"></div>
-                     )}
-                  </div>
+
+           <div className="absolute inset-0">
+              {placements.map(({ front, back }, index) => {
+                const placement = side === 'back' ? back : front;
+
+                return (
+                  <React.Fragment key={index}>
+                    {overlay ? (
+                      <>
+                        <div className="absolute shadow-sm border border-gray-200 overflow-hidden bg-gray-50" style={toStyle(front)}>
+                          <img src={frontImg} className="absolute inset-0 w-full h-full object-contain" alt="front tag" />
+                        </div>
+                        <div className="absolute shadow-sm border border-transparent overflow-hidden pointer-events-none" style={toStyle(back)}>
+                          <img
+                            src={backImg}
+                            className="absolute inset-0 w-full h-full object-contain opacity-50 mix-blend-multiply"
+                            alt="back tag overlay"
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div className={`absolute shadow-sm border ${showPrintDebug ? 'border-red-400/50' : 'border-gray-100'} overflow-hidden bg-gray-50`} style={toStyle(placement)}>
+                        <img
+                          src={side === 'front' ? frontImg : backImg}
+                          className="absolute inset-0 w-full h-full object-contain"
+                          alt="tag preview"
+                        />
+                        <div className="absolute bottom-0.5 right-1">
+                          <span className={`${boxClass} text-gray-400 font-mono`}>
+                            #{tagNumber + placement.sourceIndex}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </React.Fragment>
                 );
               })}
            </div>
+
+           {overlay && (
+             <div className="absolute inset-0 pointer-events-none">
+               <div className="w-full h-[1px] bg-red-400/40 absolute top-1/2"></div>
+               <div className="h-full w-[1px] bg-red-400/40 absolute left-1/2"></div>
+             </div>
+           )}
 
            {/* Precision Cut Guides */}
            <div className="absolute inset-2 border border-dashed border-gray-100 pointer-events-none opacity-50"></div>
@@ -620,27 +776,18 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
     setViewMode('preview');
   };
 
-  const handlePrintA4 = async (layout: '1' | '4' | '6' | '8') => {
+  const handlePrintA4 = async (layout: PrintLayout) => {
     setIsGeneratingPdf(true);
     try {
-      const isLandscape = layout === '8';
-      const pdf = new jsPDF(isLandscape ? 'l' : 'p', 'mm', 'a4');
+      const spec = getPrintLayoutSpec(layout);
+      const page = getA4PageSize(spec.isLandscape);
+      const pdf = new jsPDF(spec.isLandscape ? 'l' : 'p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
       
-      // Dynamic Scaled Tag Size (Optimized for zero-waste printing)
-      let tagW = 70;
-      let tagH = 100;
-      
-      if (layout === '8') {
-        tagW = 72; // Increased from 70
-        tagH = 103; // Increased from 100
-      }
-      
       if (!frontCanvas || !backCanvas) return;
 
-      // We need to loop and regenerate content per tag for unique codes
-      const count = parseInt(layout);
+      const count = spec.count;
 
       const getSnapshot = async (canvas: fabric.Canvas, side: 'front' | 'back', index: number) => {
         const currentId = (tagNumber + index).toString();
@@ -691,7 +838,7 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
 
         // Update QR
         if (qrObj) {
-          const url = currentId;
+          const url = qrBaseUrl + currentId;
           const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 512 });
           const img = await fabric.FabricImage.fromURL(qrDataUrl);
           qrObj.setElement(img.getElement());
@@ -707,7 +854,7 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         });
         
         if (qrObj) {
-          const url = tagId;
+          const url = qrBaseUrl + tagId;
           const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 512 });
           const img = await fabric.FabricImage.fromURL(qrDataUrl);
           qrObj.setElement(img.getElement());
@@ -721,26 +868,9 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         const canvas = side === 'front' ? frontCanvas : backCanvas;
         pdf.setFontSize(7);
         pdf.setTextColor(180);
-        pdf.text(`${side.toUpperCase()} Side - A4 ${isLandscape ? 'Landscape' : 'Portrait'} Layout - Flip: ${duplexMode}`, 5, 5);
-        
-        let cols = 2;
-        let spacingX = 10;
-        let spacingY = 10;
-        
-        if (layout === '1') { cols = 1; spacingX = 0; spacingY = 0; }
-        if (layout === '4') { cols = 2; spacingX = 20; spacingY = 20; }
-        if (layout === '8') { 
-          cols = 4; 
-          spacingX = 1.5; 
-          spacingY = 2.5; 
-        }
+        pdf.text(`${side.toUpperCase()} Side - A4 ${spec.isLandscape ? 'Landscape' : 'Portrait'} Layout - Flip: ${duplexMode}`, 5, 5);
 
-        const totalGridW = (cols * tagW) + ((cols - 1) * spacingX);
-        const rowsNum = Math.ceil(count / cols);
-        const totalGridH = (rowsNum * tagH) + ((rowsNum - 1) * spacingY);
-        
-        const startX = (pdfWidth - totalGridW) / 2;
-        const startY = (pdfHeight - totalGridH) / 2;
+        const { startX, startY, totalGridW, totalGridH } = getPlacementStart(spec, pdfWidth, pdfHeight);
 
         // Draw print safe bounds/crop marks if debug is enabled
         if (showPrintDebug) {
@@ -754,39 +884,21 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         }
 
         for(let i=0; i<count; i++) {
-          const col = i % cols;
-          const row = Math.floor(i / cols);
-          
-          let actualCol = col;
-          let actualRow = row;
-          let backIndex = i;
-
-          if (side === 'back') {
-             if (duplexMode === 'long-edge') {
-                actualCol = cols - 1 - col;
-             } else {
-                actualRow = rowsNum - 1 - row;
-             }
-             backIndex = actualRow * cols + actualCol;
-          }
-          
-          const x = startX + actualCol * (tagW + spacingX);
-          const y = startY + actualRow * (tagH + spacingY);
-          
-          const imgData = await getSnapshot(canvas!, side, side === 'front' ? i : backIndex);
-          pdf.addImage(imgData, 'PNG', x, y, tagW, tagH);
+          const placement = getPagePlacement(i, side, spec, duplexMode, page.width, page.height, backOffsetX, backOffsetY);
+          const imgData = await getSnapshot(canvas!, side, i);
+          pdf.addImage(imgData, 'PNG', placement.x, placement.y, spec.tagW, spec.tagH);
           
           // Cutting guides
           pdf.setDrawColor(200);
           pdf.setLineWidth(0.05);
-          pdf.line(x - 2, y, x + tagW + 2, y); 
-          pdf.line(x - 2, y + tagH, x + tagW + 2, y + tagH); 
-          pdf.line(x, y - 2, x, y + tagH + 2); 
-          pdf.line(x + tagW, y - 2, x + tagW, y + tagH + 2); 
+          pdf.line(placement.x - 2, placement.y, placement.x + spec.tagW + 2, placement.y); 
+          pdf.line(placement.x - 2, placement.y + spec.tagH, placement.x + spec.tagW + 2, placement.y + spec.tagH); 
+          pdf.line(placement.x, placement.y - 2, placement.x, placement.y + spec.tagH + 2); 
+          pdf.line(placement.x + spec.tagW, placement.y - 2, placement.x + spec.tagW, placement.y + spec.tagH + 2); 
           
           if (showPrintDebug) {
              pdf.setDrawColor(0, 0, 255);
-             pdf.rect(x + 2, y + 2, tagW - 4, tagH - 4); // Print safe area
+             pdf.rect(placement.x + 2, placement.y + 2, spec.tagW - 4, spec.tagH - 4);
           }
         }
       };
@@ -943,6 +1055,21 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                    />
                 </div>
 
+                <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 space-y-2">
+                   <div className="flex items-center gap-2">
+                      <LinkIcon size={12} className="text-gold-metallic" />
+                      <span className="text-[8px] font-bold uppercase text-gray-500">QR Redirect URL</span>
+                   </div>
+                   <input 
+                    type="text" 
+                    value={qrBaseUrl}
+                    onChange={(e) => setQrBaseUrl(e.target.value)}
+                    placeholder="https://yoursite.com/bags/"
+                    className="w-full bg-white border border-gray-200 rounded-lg p-2 text-[10px] font-mono focus:ring-1 focus:ring-gold-metallic outline-none"
+                   />
+                   <p className="text-[7px] text-gray-400 font-medium text-center">Tag ID will be appended to this URL</p>
+                </div>
+
                 <div className="grid grid-cols-1 gap-2">
                    <ToolButton icon={<QrCode size={18} />} label="Add QR Link" onClick={() => (activeSide === 'front' ? addQRToCanvas(frontCanvas!) : addQRToCanvas(backCanvas!))} />
                    <ToolButton icon={<Hash size={18} />} label="Add Tag Number" onClick={() => (activeSide === 'front' ? addTagNumberToCanvas(frontCanvas!) : addTagNumberToCanvas(backCanvas!))} />
@@ -998,7 +1125,7 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                      {['1', '4', '6', '8'].map(l => (
                        <button 
                         key={l}
-                        onClick={() => setPrintLayout(l as any)}
+                        onClick={() => setPrintLayout(l as PrintLayout)}
                         className={`py-2 rounded border text-[10px] font-bold ${printLayout === l ? 'bg-maroon-dark text-white border-maroon-dark' : 'bg-white text-gray-400 border-gray-100'}`}
                        >{l} Up</button>
                      ))}
@@ -1029,6 +1156,65 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                   <p className="text-[8px] text-blue-500/80 leading-relaxed font-medium mt-1">
                      {duplexMode === 'long-edge' ? 'Mirrors columns on the back page.' : 'Mirrors rows on the back page.'}
                   </p>
+               </div>
+
+               <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 space-y-3">
+                  <div className="flex items-center justify-between">
+                     <div className="flex items-center gap-2">
+                        <Settings2 size={12} className="text-orange-500" />
+                        <span className="text-[8px] font-bold uppercase text-orange-700">Back-Side Offset Correction</span>
+                     </div>
+                     {(backOffsetX !== 0 || backOffsetY !== 0) && (
+                       <button onClick={() => { setBackOffsetX(0); setBackOffsetY(0); }} className="text-[7px] text-gray-400 hover:text-red-500 font-bold uppercase border border-gray-200 rounded px-1 transition-colors">
+                         Reset
+                       </button>
+                     )}
+                  </div>
+                  <div className="space-y-2">
+                     <div className="flex items-center justify-between">
+                        <span className="text-[8px] font-bold uppercase text-orange-700">Horizontal</span>
+                        <span className={`text-[9px] font-mono font-bold ${backOffsetX === 0 ? 'text-gray-400' : backOffsetX > 0 ? 'text-orange-600' : 'text-blue-600'}`}>
+                          {backOffsetX > 0 ? '+' : ''}{backOffsetX.toFixed(1)} mm
+                        </span>
+                     </div>
+                     <input
+                       type="range"
+                       min="-5"
+                       max="5"
+                       step="0.1"
+                       value={backOffsetX}
+                       onChange={(e) => setBackOffsetX(parseFloat(e.target.value))}
+                       className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-orange-500"
+                     />
+                     <div className="flex justify-between text-[6px] text-gray-400 font-mono">
+                       <span>-5mm (left)</span>
+                       <span>0</span>
+                       <span>+5mm (right)</span>
+                     </div>
+                  </div>
+                  <div className="space-y-2">
+                     <div className="flex items-center justify-between">
+                        <span className="text-[8px] font-bold uppercase text-orange-700">Vertical</span>
+                        <span className={`text-[9px] font-mono font-bold ${backOffsetY === 0 ? 'text-gray-400' : backOffsetY > 0 ? 'text-orange-600' : 'text-blue-600'}`}>
+                          {backOffsetY > 0 ? '+' : ''}{backOffsetY.toFixed(1)} mm
+                        </span>
+                     </div>
+                     <input
+                       type="range"
+                       min="-5"
+                       max="5"
+                       step="0.1"
+                       value={backOffsetY}
+                       onChange={(e) => setBackOffsetY(parseFloat(e.target.value))}
+                       className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-orange-500"
+                     />
+                     <div className="flex justify-between text-[6px] text-gray-400 font-mono">
+                       <span>-5mm (up)</span>
+                       <span>0</span>
+                       <span>+5mm (down)</span>
+                     </div>
+                  </div>
+                  <p className="text-[7px] text-orange-500/80 font-medium">These corrections shift the back sheet only, and the preview overlay now matches the exported PDF.</p>
                </div>
                
                <div className="flex items-center justify-between p-3 border border-gray-100 rounded-xl bg-gray-50">
@@ -1148,19 +1334,69 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
            </>
          ) : (
            <div className="flex-1 w-full flex flex-col items-center p-8 space-y-12 overflow-auto">
-              <div className="flex flex-col xl:flex-row flex-wrap justify-center gap-12 items-center">
-                 <div className="space-y-4 text-center">
+              <div className="w-full max-w-7xl bg-white border border-gray-100 rounded-3xl shadow-sm p-4 md:p-6 space-y-5">
+                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                       <h3 className="font-display text-xl text-maroon-dark">Preview Zoom</h3>
+                       <p className="text-xs text-gray-500">Inspect the print sheet closely before exporting the PDF.</p>
+                    </div>
+                    <div className="flex flex-col gap-3 md:min-w-[320px]">
+                       <div className="flex items-center gap-2 justify-end">
+                          <button
+                            onClick={() => setPreviewZoom(prev => Math.max(0.5, Number((prev - 0.1).toFixed(1))))}
+                            className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-600 text-[10px] font-bold uppercase tracking-widest hover:border-maroon-dark/30"
+                          >
+                            -
+                          </button>
+                          <button
+                            onClick={() => setPreviewZoom(1)}
+                            className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-600 text-[10px] font-bold uppercase tracking-widest hover:border-maroon-dark/30"
+                          >
+                            Reset
+                          </button>
+                          <button
+                            onClick={() => setPreviewZoom(prev => Math.min(2.5, Number((prev + 0.1).toFixed(1))))}
+                            className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-600 text-[10px] font-bold uppercase tracking-widest hover:border-maroon-dark/30"
+                          >
+                            +
+                          </button>
+                          <div className="min-w-[72px] text-right text-[10px] font-mono font-bold text-maroon-dark">
+                            {(previewZoom * 100).toFixed(0)}%
+                          </div>
+                       </div>
+                       <input
+                         type="range"
+                         min="0.5"
+                         max="2.5"
+                         step="0.1"
+                         value={previewZoom}
+                         onChange={(e) => setPreviewZoom(parseFloat(e.target.value))}
+                         className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-maroon-dark"
+                       />
+                    </div>
+                 </div>
+
+                 <div
+                   className="overflow-auto rounded-2xl bg-gray-50/80 border border-gray-100 p-6 md:p-8"
+                 >
+                   <div
+                     className="flex flex-col xl:flex-row flex-wrap justify-center gap-12 items-start origin-top transition-transform duration-200"
+                     style={{ transform: `scale(${previewZoom})`, width: 'max-content', margin: '0 auto' }}
+                   >
+                     <div className="space-y-4 text-center">
                     <PrintSheetPreview side="front" layout={printLayout} frontImg={previewImages.front} backImg={previewImages.back} />
                     <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.3em]">Front Page Placement</h4>
-                 </div>
-                 <div className="space-y-4 text-center">
+                     </div>
+                     <div className="space-y-4 text-center">
                     <PrintSheetPreview side="back" layout={printLayout} frontImg={previewImages.front} backImg={previewImages.back} />
                     <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.3em]">Back Page Placement</h4>
-                 </div>
-                 <div className="space-y-4 text-center">
+                     </div>
+                     <div className="space-y-4 text-center">
                     <PrintSheetPreview side="overlay" layout={printLayout} frontImg={previewImages.front} backImg={previewImages.back} overlay={true} />
                     <h4 className="text-[10px] font-bold text-maroon-dark uppercase tracking-[0.3em]">Alignment Overlay</h4>
                     <p className="text-[8px] text-gray-400 max-w-[300px] mx-auto">Verify that front and back tags perfectly overlap in this view. The back side is shown at 50% opacity.</p>
+                     </div>
+                   </div>
                  </div>
               </div>
               

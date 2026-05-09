@@ -33,7 +33,7 @@ export default function Hero() {
         >
           <div className="h-[1px] w-8 bg-gold-light/40"></div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.5em] text-gold-light md:text-xs">
-            The Royale Wedding Celebration
+            Sandeep and Anand Wedding
           </p>
           <div className="h-[1px] w-8 bg-gold-light/40"></div>
         </motion.div>
