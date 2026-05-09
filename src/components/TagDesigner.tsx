@@ -1,0 +1,1215 @@
+import React, { useEffect, useRef, useState } from 'react';
+import * as fabric from 'fabric';
+import { 
+  Type, 
+  Trash2, 
+  Printer, 
+  Download, 
+  Layers, 
+  ChevronRight, 
+  ChevronLeft,
+  Maximize2,
+  Minimize2,
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  Bold,
+  Italic,
+  Settings2,
+  Upload,
+  Save,
+  Check,
+  QrCode,
+  Palette,
+  Image as ImageIcon,
+  RefreshCw,
+  Link as LinkIcon,
+  Hash
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import QRCode from 'qrcode';
+import jsPDF from 'jspdf';
+import localforage from 'localforage';
+import { bagService } from '../services/bagService';
+
+interface TagDesignerProps {
+  onSave: (tagData: any) => void;
+  initialData?: any;
+}
+
+const DEFAULT_TEMPLATES = [
+  {
+    id: 'floral-gold',
+    name: 'Royal Floral Gold',
+    front: 'https://images.unsplash.com/photo-1526047932273-341f2a7631f9?q=80&w=800&auto=format&fit=crop',
+    back: 'https://images.unsplash.com/photo-1533158326339-7f3cf2404354?q=80&w=800&auto=format&fit=crop'
+  }
+];
+
+export default function TagDesigner({ onSave }: TagDesignerProps) {
+  const [activeSide, setActiveSide] = useState<'front' | 'back'>('front');
+  const [viewMode, setViewMode] = useState<'editor' | 'preview'>('editor');
+  const frontCanvasRef = useRef<HTMLCanvasElement>(null);
+  const backCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [frontCanvas, setFrontCanvas] = useState<fabric.Canvas | null>(null);
+  const [backCanvas, setBackCanvas] = useState<fabric.Canvas | null>(null);
+  const [selectedObject, setSelectedObject] = useState<fabric.Object | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [printLayout, setPrintLayout] = useState<'1' | '4' | '6' | '8'>('8');
+  const [duplexMode, setDuplexMode] = useState<'long-edge' | 'short-edge'>('long-edge');
+  const [showPrintDebug, setShowPrintDebug] = useState(false);
+  
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [previewImages, setPreviewImages] = useState<{ front: string, back: string }>({ front: '', back: '' });
+  
+  const [tagNumber, setTagNumber] = useState<number>(100);
+  const [tagId, setTagId] = useState('100');
+  const [activeTemplate, setActiveTemplate] = useState(DEFAULT_TEMPLATES[0]);
+  const [customTemplates, setCustomTemplates] = useState<any[]>([]);
+  const [isUploading, setIsUploading] = useState<{ front: boolean, back: boolean }>({ front: false, back: false });
+  const isMounted = useRef(true);
+
+  // Canvas dimensions for the tag (scaled for screen, roughly 70x100mm ratio)
+  const TAG_WIDTH = 350;
+  const TAG_HEIGHT = 500;
+
+  useEffect(() => {
+    isMounted.current = true;
+    const init = async () => {
+      try {
+        const nextNum = await bagService.getNextTagNumber();
+        if (isMounted.current) {
+          setTagNumber(nextNum);
+          setTagId(nextNum.toString());
+          loadTemplates();
+        }
+      } catch (err) {
+        console.error('Initialization error:', err);
+      }
+    };
+    init();
+    return () => { isMounted.current = false; };
+  }, []);
+
+  const loadTemplates = async () => {
+    const templates = await bagService.getTagTemplates();
+    if (isMounted.current) {
+      setCustomTemplates(templates);
+      
+      // Proactive background caching of high-quality images
+      templates.forEach(async (tpl) => {
+        try {
+          const cacheKey = `tpl_img_${tpl.id}`;
+          const cached = await localforage.getItem(cacheKey);
+          if (!cached) {
+            // Pre-warm cache for faster subsequent loads
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = tpl.front_url;
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.width;
+              canvas.height = img.height;
+              const ctx = canvas.getContext('2d');
+              ctx?.drawImage(img, 0, 0);
+              localforage.setItem(`${cacheKey}_front`, canvas.toDataURL('image/png', 0.9));
+            };
+          }
+        } catch (e) {
+          console.warn('Caching failed:', e);
+        }
+      });
+    }
+  };
+
+  const isLoadingTemplate = useRef(false);
+
+  useEffect(() => {
+    if (!frontCanvasRef.current || !backCanvasRef.current) return;
+
+    let active = true;
+
+    const fCanvas = new fabric.Canvas(frontCanvasRef.current, {
+      width: TAG_WIDTH,
+      height: TAG_HEIGHT,
+      backgroundColor: 'transparent',
+      preserveObjectStacking: true,
+      enableRetinaScaling: true
+    });
+
+    const bCanvas = new fabric.Canvas(backCanvasRef.current, {
+      width: TAG_WIDTH,
+      height: TAG_HEIGHT,
+      backgroundColor: 'transparent',
+      preserveObjectStacking: true,
+      enableRetinaScaling: true
+    });
+
+    const setupCanvas = async (canvas: fabric.Canvas, side: 'front' | 'back') => {
+      if (!active) return;
+
+      canvas.on('selection:created', (e) => setSelectedObject(e.selected?.[0] || null));
+      canvas.on('selection:updated', (e) => setSelectedObject(e.selected?.[0] || null));
+      canvas.on('selection:cleared', () => setSelectedObject(null));
+      
+      const saveState = () => {
+        if (!active || !canvas.wrapperEl || isLoadingTemplate.current) return;
+        try {
+          const projectData = localStorage.getItem('kalyanam_tag_project');
+          const currentProject = projectData ? JSON.parse(projectData) : {};
+          currentProject[side] = canvas.toObject(['id', 'selectable', 'evented']);
+          localStorage.setItem('kalyanam_tag_project', JSON.stringify(currentProject));
+        } catch (e) {
+          console.warn('Storage sync failed:', e);
+        }
+      };
+
+      canvas.on('object:modified', saveState);
+      canvas.on('object:added', saveState);
+      canvas.on('object:removed', saveState);
+
+      const imgUrl = side === 'front' ? activeTemplate.front : activeTemplate.back;
+      try {
+        const img = await fabric.FabricImage.fromURL(imgUrl, { 
+          crossOrigin: 'anonymous'
+        });
+        
+        if (!active || !canvas.wrapperEl) return;
+
+        const scaleX = TAG_WIDTH / (img.width || 1);
+        const scaleY = TAG_HEIGHT / (img.height || 1);
+        const scale = Math.min(scaleX, scaleY);
+        
+        img.set({
+          scaleX: scale,
+          scaleY: scale,
+          left: TAG_WIDTH / 2,
+          top: TAG_HEIGHT / 2,
+          originX: 'center',
+          originY: 'center',
+          selectable: false,
+          evented: false
+        });
+        
+        canvas.backgroundImage = img;
+        canvas.renderAll();
+      } catch (err) {
+        if (!active || !canvas.wrapperEl) return;
+        console.error(`Error loading ${side} background:`, err);
+        canvas.backgroundColor = '#ffffff';
+        canvas.renderAll();
+      }
+    };
+
+    setupCanvas(fCanvas, 'front');
+    setupCanvas(bCanvas, 'back');
+
+    setFrontCanvas(fCanvas);
+    setBackCanvas(bCanvas);
+
+    const restoreProject = async () => {
+      if (!active) return;
+      isLoadingTemplate.current = true;
+      const savedProject = localStorage.getItem('kalyanam_tag_project');
+      
+      try {
+        if (!savedProject) {
+          if (active) {
+            addQRToCanvas(fCanvas);
+            fCanvas.add(new fabric.IText('Wedding Guest', {
+              left: TAG_WIDTH / 2,
+              top: 100,
+              fontFamily: 'Playfair Display',
+              fontSize: 28,
+              fill: '#580000',
+              originX: 'center',
+              textAlign: 'center'
+            }) as any);
+
+            bCanvas.add(new fabric.IText(`TAG: ${tagId}`, {
+              id: 'tag-id-label',
+              left: TAG_WIDTH / 2,
+              top: TAG_HEIGHT - 30,
+              fontFamily: 'Courier New',
+              fontSize: 24,
+              fontWeight: 'bold',
+              fill: '#000000',
+              originX: 'center',
+              originY: 'center',
+              lockMovementX: false,
+              lockMovementY: false,
+              hasControls: true
+            }) as any);
+          }
+        } else {
+          const data = JSON.parse(savedProject);
+          const load = (canvas: fabric.Canvas, json: any) => {
+            return new Promise<void>((resolve) => {
+              if (!active || !canvas.wrapperEl) return resolve();
+              canvas.loadFromJSON(json).then(() => {
+                if (active && canvas.wrapperEl) {
+                  canvas.renderAll();
+                  resolve();
+                } else {
+                  resolve();
+                }
+              }).catch(() => resolve());
+            });
+          };
+
+          if (data.front) await load(fCanvas, data.front);
+          if (data.back) await load(bCanvas, data.back);
+        }
+      } catch (e) {
+        console.warn('Silent fallback for restoreProject:', e);
+      } finally {
+        if (active) {
+          isLoadingTemplate.current = false;
+        }
+      }
+    };
+
+    restoreProject();
+
+    return () => {
+      active = false;
+      fCanvas.dispose();
+      bCanvas.dispose();
+    };
+  }, [activeTemplate]);
+
+
+
+  const handleCustomUpload = async (e: React.ChangeEvent<HTMLInputElement>, side: 'front' | 'back') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Immediate local preview
+    const localUrl = URL.createObjectURL(file);
+    if (side === 'front') {
+      setActiveTemplate(prev => ({ ...prev, id: 'custom', front: localUrl }));
+    } else {
+      setActiveTemplate(prev => ({ ...prev, id: 'custom', back: localUrl }));
+    }
+
+    setIsUploading(prev => ({ ...prev, [side]: true }));
+    setErrorMessage(null);
+
+    try {
+      const url = await bagService.uploadBagImage(file);
+      if (!url) {
+        setIsUploading(prev => ({ ...prev, [side]: false }));
+        return;
+      }
+
+      if (url.startsWith('blob:')) {
+        setErrorMessage('Cloud storage is not configured or secured. Using local preview (will not persist outside this session).');
+      }
+
+      const finalUrl = url;
+      if (side === 'front') {
+        setActiveTemplate(prev => ({ ...prev, id: 'custom', front: finalUrl }));
+      } else {
+        setActiveTemplate(prev => ({ ...prev, id: 'custom', back: finalUrl }));
+      }
+    } catch (err: any) {
+      console.error('Upload failed:', err);
+      if (err.isRlsError) {
+        setErrorMessage(err.message);
+      } else {
+        setErrorMessage('Failed to upload image. Please check your connection or storage settings.');
+      }
+    } finally {
+      setIsUploading(prev => ({ ...prev, [side]: false }));
+    }
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!frontCanvas || !backCanvas) return;
+    setIsSaving(true);
+    try {
+      const timestamp = new Date();
+      const templateName = `Design ${timestamp.toLocaleDateString()} ${timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      
+      // Generate High Quality Snapshots for the template preview
+      // We want to save what the user SEE'S as the template image
+      const frontSnapshot = frontCanvas.toDataURL({ format: 'png', multiplier: 2 });
+      const backSnapshot = backCanvas.toDataURL({ format: 'png', multiplier: 2 });
+
+      // 1. First save as a template (images)
+      // We use the snapshots as the URLs for the template preview so it's "what you see is what you get"
+      const template = await bagService.saveTagTemplate({
+        name: templateName,
+        front_url: frontSnapshot, // This might be large, but let's try
+        back_url: backSnapshot
+      });
+
+      if (template) {
+        // 2. Then save the specific layout (objects/configs)
+        await bagService.saveTagLayout({
+          template_id: template.id,
+          name: templateName,
+          front_config: frontCanvas.toObject(['id', '_element_type', 'selectable', 'evented']),
+          back_config: backCanvas.toObject(['id', '_element_type', 'selectable', 'evented'])
+        });
+
+        // 3. Robust Cache storage for instant loading
+        const cacheKey = `tpl_layout_${template.id}`;
+        await localforage.setItem(cacheKey, {
+          front: frontCanvas.toObject(['id', '_element_type', 'selectable', 'evented']),
+          back: backCanvas.toObject(['id', '_element_type', 'selectable', 'evented'])
+        });
+        
+        await localforage.setItem(`tpl_img_${template.id}_front`, frontSnapshot);
+        await localforage.setItem(`tpl_img_${template.id}_back`, backSnapshot);
+
+        setSaveSuccess(true);
+        loadTemplates();
+        setTimeout(() => setSaveSuccess(false), 2000);
+      }
+    } catch (err: any) {
+      console.error('Failed to save template:', err);
+      if (err.message.includes('Permission') || err.message.includes('RLS')) {
+        setErrorMessage('PERMISSION DENIED: Supabase RLS is blocking the save. Please check your database policies.');
+      } else {
+        setErrorMessage('Failed to save design to cloud.');
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const loadSavedTemplate = async (tpl: any) => {
+    isLoadingTemplate.current = true;
+    try {
+      // 1. Try to load from Local Cache First (Instant)
+      const cacheKey = `tpl_layout_${tpl.id}`;
+      let layoutData = await localforage.getItem<any>(cacheKey);
+      
+      // 2. Fallback to server layout data if cache missed
+      if (!layoutData && tpl.layout) {
+        layoutData = {
+          front: tpl.layout.front_config,
+          back: tpl.layout.back_config
+        };
+        // Populate cache for next time
+        await localforage.setItem(cacheKey, layoutData);
+      }
+
+      if (layoutData) {
+        localStorage.setItem('kalyanam_tag_project', JSON.stringify(layoutData));
+      }
+
+      // Check if we have cached high-res images
+      const cachedFront = await localforage.getItem<string>(`tpl_img_${tpl.id}_front`);
+      const cachedBack = await localforage.getItem<string>(`tpl_img_${tpl.id}_back`);
+
+      // 3. Set the active template
+      setActiveTemplate({ 
+        id: tpl.id, 
+        name: tpl.name, 
+        front: cachedFront || tpl.front_url, 
+        back: cachedBack || tpl.back_url 
+      });
+    } catch (e) {
+      console.error('Failed to load saved template:', e);
+      // Fallback
+      setActiveTemplate({ id: tpl.id, name: tpl.name, front: tpl.front_url, back: tpl.back_url });
+    } finally {
+      isLoadingTemplate.current = false;
+    }
+  };
+
+  const handleDeleteTemplate = async (e: React.MouseEvent, tpl: any) => {
+    e.stopPropagation(); // Prevent triggering the select
+    if (!window.confirm(`Are you sure you want to delete template "${tpl.name}"?`)) return;
+
+    try {
+      const success = await bagService.deleteTagTemplate(tpl.id);
+      if (success) {
+        setCustomTemplates(prev => prev.filter(t => t.id !== tpl.id));
+        setSuccessMessage('Template deleted successfully!');
+        if (activeTemplate.id === tpl.id) {
+          // If deleted template was active, switch to default
+          setActiveTemplate(DEFAULT_TEMPLATES[0]);
+          loadSavedTemplate(DEFAULT_TEMPLATES[0]);
+        }
+        setTimeout(() => setSuccessMessage(null), 3000);
+      } else {
+        setErrorMessage('Failed to delete template.');
+        setTimeout(() => setErrorMessage(null), 3000);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Error deleting template');
+      setTimeout(() => setErrorMessage(null), 3000);
+    }
+  };
+
+  const addTagNumberToCanvas = (canvas: fabric.Canvas) => {
+    const text = new fabric.IText(`TAG: ${tagId}`, {
+      id: 'tag-id-label',
+      left: TAG_WIDTH / 2,
+      top: TAG_HEIGHT - 30,
+      fontFamily: 'Courier New',
+      fontSize: 24,
+      fontWeight: 'bold',
+      fill: '#000000',
+      originX: 'center',
+      originY: 'center',
+      lockMovementX: false,
+      lockMovementY: false,
+      hasControls: true
+    });
+    canvas.add(text as any);
+    canvas.setActiveObject(text as any);
+    canvas.renderAll();
+  };
+
+  const addQRToCanvas = async (canvas: fabric.Canvas, forcedId?: string) => {
+    try {
+      const idToUse = forcedId || tagId;
+      const url = idToUse;
+      const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 512 });
+      const img = await fabric.FabricImage.fromURL(qrDataUrl);
+      img.set({
+        id: 'qr-code',
+        _element_type: 'qr',
+        left: TAG_WIDTH / 2,
+        top: TAG_HEIGHT / 2 + 50,
+        originX: 'center',
+        originY: 'center',
+        scaleX: 0.35,
+        scaleY: 0.35
+      });
+      canvas.add(img as any);
+      canvas.setActiveObject(img);
+      canvas.renderAll();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const PrintSheetPreview = ({ side, layout, frontImg, backImg, overlay = false }: { side: 'front' | 'back' | 'overlay', layout: '1' | '4' | '6' | '8', frontImg: string, backImg: string, overlay?: boolean }) => {
+    const isLandscape = layout === '8';
+    const counts = parseInt(layout);
+    
+    // Grid settings
+    let cols = 2;
+    if (layout === '1') cols = 1;
+    if (layout === '8') cols = 4;
+    
+    const rowsNum = Math.ceil(counts / cols);
+    const items = Array.from({ length: counts });
+    
+    return (
+      <div className="relative group cursor-pointer" onClick={() => setViewMode('editor')}>
+        <div className={`bg-white shadow-2xl overflow-hidden relative border border-gray-200 transition-all ${isLandscape ? 'w-[620px] h-[440px]' : 'w-[420px] h-[594px]'}`}>
+           {/* A4 Info overlay */}
+           <div className="absolute top-2 left-4 z-20">
+              <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
+                {side === 'overlay' ? 'ALIGNMENT OVERLAY' : `${side.toUpperCase()} SHEET`} - A4 {isLandscape ? 'LANDSCAPE' : 'PORTRAIT'}
+              </span>
+           </div>
+           
+           <div className={`grid gap-1 p-3 h-full place-items-center ${cols === 4 ? 'grid-cols-4' : (cols === 2 ? 'grid-cols-2' : 'grid-cols-1')}`}>
+              {items.map((_, i) => {
+                 const col = i % cols;
+                 const row = Math.floor(i / cols);
+                 
+                 // Determine back col/row based on duplex mode
+                 let backCol = col;
+                 let backRow = row;
+                 
+                 if (duplexMode === 'long-edge') {
+                   // Mirror horizontally (columns)
+                   backCol = cols - 1 - col;
+                 } else {
+                   // Mirror vertically (rows)
+                   backRow = rowsNum - 1 - row;
+                 }
+                 
+                 const backIndex = backRow * cols + backCol;
+                 
+                 return (
+                  <div key={i} className={`relative shadow-sm border ${showPrintDebug ? 'border-red-400/50' : 'border-gray-50'} flex items-center justify-center overflow-hidden bg-gray-50 ${layout === '1' ? 'w-[240px] h-[340px]' : layout === '8' ? 'w-[145px] h-[200px]' : 'w-[160px] h-[220px]'}`}>
+                     {side === 'overlay' ? (
+                        <>
+                           <img src={frontImg} className="absolute inset-0 w-full h-full object-contain" alt="front tag" />
+                           <img src={backImg} className="absolute inset-0 w-full h-full object-contain opacity-50 mix-blend-multiply" alt="back tag" />
+                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                              {showPrintDebug && (
+                                <>
+                                  <div className="w-full h-[1px] bg-red-500/50 absolute top-1/2"></div>
+                                  <div className="h-full w-[1px] bg-red-500/50 absolute left-1/2"></div>
+                                </>
+                              )}
+                           </div>
+                        </>
+                     ) : (
+                        <>
+                           <img 
+                            src={side === 'front' ? frontImg : backImg} 
+                            className="w-full h-full object-contain" 
+                            alt="tag preview" 
+                           />
+                           <div className="absolute bottom-0.5 right-1">
+                              <span className="text-[5px] text-gray-400 font-mono">
+                                #{side === 'front' ? tagNumber + i : tagNumber + backIndex}
+                              </span>
+                           </div>
+                        </>
+                     )}
+                     
+                     {showPrintDebug && (
+                       <div className="absolute inset-1 border border-dashed border-blue-400/30 pointer-events-none"></div>
+                     )}
+                  </div>
+                );
+              })}
+           </div>
+
+           {/* Precision Cut Guides */}
+           <div className="absolute inset-2 border border-dashed border-gray-100 pointer-events-none opacity-50"></div>
+        </div>
+        <div className="mt-4 flex justify-center">
+           <span className="px-4 py-1.5 bg-maroon-dark text-white rounded-full text-[9px] font-bold uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-all">Click to Edit Template</span>
+        </div>
+      </div>
+    );
+  };
+
+  const addText = () => {
+    const canvas = activeSide === 'front' ? frontCanvas : backCanvas;
+    if (!canvas) return;
+    const text = new fabric.IText('Your Text Here', {
+      left: TAG_WIDTH / 2,
+      top: TAG_HEIGHT / 2 - 100,
+      fontFamily: 'Playfair Display',
+      fontSize: 20,
+      fill: '#580000',
+      originX: 'center'
+    });
+    canvas.add(text as any);
+    canvas.setActiveObject(text);
+    canvas.renderAll();
+  };
+
+  const deleteSelected = () => {
+    const canvas = activeSide === 'front' ? frontCanvas : backCanvas;
+    if (!canvas || !selectedObject) return;
+    canvas.remove(selectedObject);
+    setSelectedObject(null);
+    canvas.renderAll();
+  };
+
+  const updateTextProp = (prop: string, value: any) => {
+    if (!selectedObject || !(selectedObject instanceof fabric.IText)) return;
+    selectedObject.set(prop as any, value);
+    activeSide === 'front' ? frontCanvas?.renderAll() : backCanvas?.renderAll();
+  };
+
+  const regeneratePreview = () => {
+    if (!frontCanvas || !backCanvas) return;
+    setPreviewImages({
+      front: frontCanvas.toDataURL({ format: 'png', multiplier: 2 }),
+      back: backCanvas.toDataURL({ format: 'png', multiplier: 2 })
+    });
+    setViewMode('preview');
+  };
+
+  const handlePrintA4 = async (layout: '1' | '4' | '6' | '8') => {
+    setIsGeneratingPdf(true);
+    try {
+      const isLandscape = layout === '8';
+      const pdf = new jsPDF(isLandscape ? 'l' : 'p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      
+      // Dynamic Scaled Tag Size (Optimized for zero-waste printing)
+      let tagW = 70;
+      let tagH = 100;
+      
+      if (layout === '8') {
+        tagW = 72; // Increased from 70
+        tagH = 103; // Increased from 100
+      }
+      
+      if (!frontCanvas || !backCanvas) return;
+
+      // We need to loop and regenerate content per tag for unique codes
+      const count = parseInt(layout);
+
+      const getSnapshot = async (canvas: fabric.Canvas, side: 'front' | 'back', index: number) => {
+        const currentId = (tagNumber + index).toString();
+        
+        // Find and update QR/TagText
+        const objects = canvas.getObjects();
+        
+        const qrObj = objects.find(o => 
+          (o as any).id === 'qr-code' || 
+          ((o as any)._element_type === 'qr') ||
+          (o.type === 'image' && (o as any).src?.includes('data:image/png'))
+        ) as fabric.FabricImage;
+
+        // Find ALL text objects that contain [TAG_NUMBER] or have tag-id-label
+        const dynamicTexts = objects.filter(o => 
+           o.type === 'i-text' || o.type === 'text' || o.type === 'textbox'
+        ) as fabric.IText[];
+
+        // Save original texts to restore later
+        const originalTexts = new Map<fabric.IText, string>();
+        
+        dynamicTexts.forEach(textObj => {
+          const textContent = (textObj as any).text || '';
+          let updated = false;
+          let newText = textContent;
+
+          if ((textObj as any).id === 'tag-id-label' || textContent === tagId || textContent.includes('TAG:')) {
+             originalTexts.set(textObj, textContent);
+             if (textContent.includes(tagId)) {
+                newText = textContent.replace(tagId, currentId);
+             } else if (textContent.includes('TAG:')) {
+                newText = `TAG: ${currentId}`;
+             } else {
+                newText = currentId;
+             }
+             updated = true;
+          }
+          if (textContent.includes('[TAG_NUMBER]')) {
+             originalTexts.set(textObj, textContent);
+             newText = textContent.replace(/\[TAG_NUMBER\]/g, currentId);
+             updated = true;
+          }
+
+          if (updated) {
+             textObj.set('text', newText);
+          }
+        });
+
+        // Update QR
+        if (qrObj) {
+          const url = currentId;
+          const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 512 });
+          const img = await fabric.FabricImage.fromURL(qrDataUrl);
+          qrObj.setElement(img.getElement());
+          (qrObj as any)._element_type = 'qr';
+        }
+
+        canvas.renderAll();
+        const data = canvas.toDataURL({ format: 'png', multiplier: 3 });
+
+        // Restore original state
+        originalTexts.forEach((origText, textObj) => {
+          textObj.set('text', origText);
+        });
+        
+        if (qrObj) {
+          const url = tagId;
+          const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 512 });
+          const img = await fabric.FabricImage.fromURL(qrDataUrl);
+          qrObj.setElement(img.getElement());
+        }
+
+        canvas.renderAll();
+        return data;
+      };
+
+      const drawPage = async (side: 'front' | 'back') => {
+        const canvas = side === 'front' ? frontCanvas : backCanvas;
+        pdf.setFontSize(7);
+        pdf.setTextColor(180);
+        pdf.text(`${side.toUpperCase()} Side - A4 ${isLandscape ? 'Landscape' : 'Portrait'} Layout - Flip: ${duplexMode}`, 5, 5);
+        
+        let cols = 2;
+        let spacingX = 10;
+        let spacingY = 10;
+        
+        if (layout === '1') { cols = 1; spacingX = 0; spacingY = 0; }
+        if (layout === '4') { cols = 2; spacingX = 20; spacingY = 20; }
+        if (layout === '8') { 
+          cols = 4; 
+          spacingX = 1.5; 
+          spacingY = 2.5; 
+        }
+
+        const totalGridW = (cols * tagW) + ((cols - 1) * spacingX);
+        const rowsNum = Math.ceil(count / cols);
+        const totalGridH = (rowsNum * tagH) + ((rowsNum - 1) * spacingY);
+        
+        const startX = (pdfWidth - totalGridW) / 2;
+        const startY = (pdfHeight - totalGridH) / 2;
+
+        // Draw print safe bounds/crop marks if debug is enabled
+        if (showPrintDebug) {
+           pdf.setDrawColor(255, 0, 0);
+           pdf.setLineWidth(0.1);
+           pdf.rect(startX, startY, totalGridW, totalGridH);
+           
+           // Center crosshairs
+           pdf.line(pdfWidth/2, startY - 5, pdfWidth/2, startY + totalGridH + 5);
+           pdf.line(startX - 5, pdfHeight/2, startX + totalGridW + 5, pdfHeight/2);
+        }
+
+        for(let i=0; i<count; i++) {
+          const col = i % cols;
+          const row = Math.floor(i / cols);
+          
+          let actualCol = col;
+          let actualRow = row;
+          let backIndex = i;
+
+          if (side === 'back') {
+             if (duplexMode === 'long-edge') {
+                actualCol = cols - 1 - col;
+             } else {
+                actualRow = rowsNum - 1 - row;
+             }
+             backIndex = actualRow * cols + actualCol;
+          }
+          
+          const x = startX + actualCol * (tagW + spacingX);
+          const y = startY + actualRow * (tagH + spacingY);
+          
+          const imgData = await getSnapshot(canvas!, side, side === 'front' ? i : backIndex);
+          pdf.addImage(imgData, 'PNG', x, y, tagW, tagH);
+          
+          // Cutting guides
+          pdf.setDrawColor(200);
+          pdf.setLineWidth(0.05);
+          pdf.line(x - 2, y, x + tagW + 2, y); 
+          pdf.line(x - 2, y + tagH, x + tagW + 2, y + tagH); 
+          pdf.line(x, y - 2, x, y + tagH + 2); 
+          pdf.line(x + tagW, y - 2, x + tagW, y + tagH + 2); 
+          
+          if (showPrintDebug) {
+             pdf.setDrawColor(0, 0, 255);
+             pdf.rect(x + 2, y + 2, tagW - 4, tagH - 4); // Print safe area
+          }
+        }
+      };
+
+      await drawPage('front');
+      if (layout !== '1') {
+        pdf.addPage();
+        await drawPage('back');
+      }
+      
+      pdf.save(`Wedding_Tags_${layout}_up_${tagId}.pdf`);
+    } catch (err) {
+      console.error('PDF generation failed:', err);
+      setErrorMessage('Failed to generate PDF. Please try again.');
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  return (
+    <div className="flex bg-slate-50 h-full font-sans overflow-hidden border-l border-gray-100">
+      <AnimatePresence>
+        {errorMessage && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 bg-red-500 text-white rounded-full shadow-2xl flex items-center gap-3 text-xs font-bold uppercase tracking-widest"
+          >
+            <span>{errorMessage}</span>
+            <button onClick={() => setErrorMessage(null)} className="hover:scale-110 transition-transform"><Trash2 size={14} className="rotate-45" /></button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Templates Panel */}
+      <div className="w-80 bg-white border-r border-gray-100 flex flex-col shadow-2xl z-10 shrink-0">
+        <div className="p-4 border-b border-gray-50 bg-maroon-dark text-white">
+          <div className="flex items-center gap-3 mb-1">
+             <Palette className="text-gold-metallic" size={18} />
+             <h3 className="font-display text-lg">Tag Studio Pro</h3>
+          </div>
+          <p className="text-[8px] uppercase tracking-[0.2em] text-ivory/50 font-bold">Print & Production Ready</p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          {/* Mode Switcher */}
+          <div className="bg-gray-100 p-1 rounded-xl flex">
+             <button 
+              onClick={() => setViewMode('editor')}
+              className={`flex-1 py-2 text-[9px] font-bold uppercase tracking-widest rounded-lg transition-all ${viewMode === 'editor' ? 'bg-white shadow-sm text-maroon-dark' : 'text-gray-400'}`}
+             >Design</button>
+             <button 
+              onClick={regeneratePreview}
+              className={`flex-1 py-2 text-[9px] font-bold uppercase tracking-widest rounded-lg transition-all ${viewMode === 'preview' ? 'bg-white shadow-sm text-maroon-dark' : 'text-gray-400'}`}
+             >Live Print Preview</button>
+          </div>
+
+          {viewMode === 'editor' ? (
+            <>
+              {/* Custom Uploads */}
+              <section className="space-y-3">
+                 <div className="flex items-center gap-2 mb-1">
+                    <Upload size={12} className="text-maroon-deep" />
+                    <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Custom PNG Template</label>
+                 </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="relative group">
+                       <input type="file" accept="image/png,image/jpeg" onChange={(e) => handleCustomUpload(e, 'front')} className="absolute inset-0 opacity-0 cursor-pointer z-10" disabled={isUploading.front} />
+                       <div className={`bg-gray-50 border-2 border-dashed rounded-lg p-2 text-center transition-colors ${isUploading.front ? 'border-maroon-dark animate-pulse' : 'border-gray-200 group-hover:border-gold-metallic'}`}>
+                          {isUploading.front ? (
+                            <RefreshCw className="mx-auto text-maroon-dark animate-spin mb-1" size={16} />
+                          ) : (
+                            <ImageIcon className="mx-auto text-gray-300 mb-1" size={16} />
+                          )}
+                          <span className={`text-[7px] font-bold uppercase block ${isUploading.front ? 'text-maroon-dark' : 'text-gray-400'}`}>
+                            {isUploading.front ? 'Uploading...' : 'Front PNG'}
+                          </span>
+                       </div>
+                    </div>
+                    <div className="relative group">
+                       <input type="file" accept="image/png,image/jpeg" onChange={(e) => handleCustomUpload(e, 'back')} className="absolute inset-0 opacity-0 cursor-pointer z-10" disabled={isUploading.back} />
+                       <div className={`bg-gray-50 border-2 border-dashed rounded-lg p-2 text-center transition-colors ${isUploading.back ? 'border-maroon-dark animate-pulse' : 'border-gray-200 group-hover:border-gold-metallic'}`}>
+                          {isUploading.back ? (
+                            <RefreshCw className="mx-auto text-maroon-dark animate-spin mb-1" size={16} />
+                          ) : (
+                            <ImageIcon className="mx-auto text-gray-300 mb-1" size={16} />
+                          )}
+                          <span className={`text-[7px] font-bold uppercase block ${isUploading.back ? 'text-maroon-dark' : 'text-gray-400'}`}>
+                            {isUploading.back ? 'Uploading...' : 'Back PNG'}
+                          </span>
+                       </div>
+                    </div>
+                 </div>
+              </section>
+
+              {/* Saved Templates */}
+              {customTemplates.length > 0 && (
+                <section className="space-y-3">
+                   <div className="flex items-center gap-2 mb-1">
+                      <Save size={12} className="text-maroon-deep" />
+                      <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Saved Design Studio</label>
+                   </div>
+                   <div className="grid grid-cols-2 gap-2">
+                      {customTemplates.map((tpl) => (
+                        <button 
+                          key={tpl.id}
+                          onClick={() => loadSavedTemplate(tpl)}
+                          className={`group relative aspect-[7/10] overflow-hidden rounded-lg border-2 transition-all ${activeTemplate.id === tpl.id ? 'border-maroon-dark shadow-md' : 'border-gray-100 hover:border-gold-metallic grayscale-[40%] hover:grayscale-0'}`}
+                        >
+                           <img src={tpl.front_url} className="w-full h-full object-cover" alt={tpl.name} />
+                           <div className="absolute inset-x-0 bottom-0 bg-maroon-dark/80 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <span className="text-[6px] font-bold text-white uppercase truncate block text-center">{tpl.name}</span>
+                           </div>
+                           {activeTemplate.id === tpl.id && (
+                             <div className="absolute top-1 right-1 bg-maroon-dark text-white rounded-full p-0.5">
+                                <Check size={8} />
+                             </div>
+                           )}
+                           <button 
+                             onClick={(e) => handleDeleteTemplate(e, tpl)}
+                             className="absolute top-1 left-1 bg-red-500/80 hover:bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                             title="Delete Template"
+                           >
+                              <Trash2 size={10} />
+                           </button>
+                        </button>
+                      ))}
+                   </div>
+                </section>
+              )}
+
+              {/* Design Controls */}
+              <section className="space-y-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Type size={14} className="text-maroon-deep" />
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Overlay Tools</label>
+                </div>
+                
+                <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 space-y-2">
+                   <div className="flex items-center gap-2">
+                      <QrCode size={12} className="text-gold-metallic" />
+                      <span className="text-[8px] font-bold uppercase text-gray-500">Starting Tag #</span>
+                   </div>
+                   <input 
+                    type="number" 
+                    value={tagNumber}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value) || 0;
+                      setTagNumber(val);
+                      setTagId(val.toString());
+                    }}
+                    className="w-full bg-white border border-gray-200 rounded-lg p-2 text-[10px] font-mono focus:ring-1 focus:ring-gold-metallic outline-none"
+                   />
+                </div>
+
+                <div className="grid grid-cols-1 gap-2">
+                   <ToolButton icon={<QrCode size={18} />} label="Add QR Link" onClick={() => (activeSide === 'front' ? addQRToCanvas(frontCanvas!) : addQRToCanvas(backCanvas!))} />
+                   <ToolButton icon={<Hash size={18} />} label="Add Tag Number" onClick={() => (activeSide === 'front' ? addTagNumberToCanvas(frontCanvas!) : addTagNumberToCanvas(backCanvas!))} />
+                   <ToolButton icon={<Type size={18} />} label="Add Text Layer" onClick={addText} />
+                </div>
+              </section>
+
+              {/* Element properties */}
+              {selectedObject && (
+                <motion.section 
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="bg-gray-50 rounded-2xl p-5 space-y-4 border border-gray-100 shadow-inner"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                       <Settings2 size={12} className="text-maroon-deep" />
+                       <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Layer Properties</label>
+                    </div>
+                    <button onClick={deleteSelected} className="text-red-400 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
+                  </div>
+                  
+                  {selectedObject instanceof fabric.IText && (
+                    <div className="space-y-4">
+                       <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                          <button onClick={() => updateTextProp('fontWeight', selectedObject.fontWeight === 'bold' ? 'normal' : 'bold')} className={`p-2 rounded-lg ${selectedObject.fontWeight === 'bold' ? 'bg-maroon-dark text-white' : 'hover:bg-white'}`}><Bold size={14} /></button>
+                          <button onClick={() => updateTextProp('fontStyle', selectedObject.fontStyle === 'italic' ? 'normal' : 'italic')} className={`p-2 rounded-lg ${selectedObject.fontStyle === 'italic' ? 'bg-maroon-dark text-white' : 'hover:bg-white'}`}><Italic size={14} /></button>
+                          <button onClick={() => updateTextProp('textAlign', 'center')} className="p-2 hover:bg-white rounded-lg"><AlignCenter size={14} /></button>
+                       </div>
+                       <div className="space-y-2">
+                          <label className="text-[8px] font-bold uppercase text-gray-400">Palette</label>
+                          <div className="flex flex-wrap gap-2">
+                             {['#580000', '#D4AF37', '#333333', '#ffffff', '#710D0D', '#000000'].map(c => (
+                               <button 
+                                key={c} 
+                                onClick={() => updateTextProp('fill', c)}
+                                style={{ backgroundColor: c }}
+                                className={`w-5 h-5 rounded-full border border-gray-200 transition-all ${selectedObject.fill === c ? 'scale-125 ring-2 ring-gold-metallic/30' : 'hover:scale-110'}`}
+                               />
+                             ))}
+                          </div>
+                       </div>
+                    </div>
+                  )}
+                </motion.section>
+              )}
+            </>
+          ) : (
+            <section className="space-y-6">
+               <div className="space-y-2">
+                  <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Sheet Layout</label>
+                  <div className="grid grid-cols-4 gap-2">
+                     {['1', '4', '6', '8'].map(l => (
+                       <button 
+                        key={l}
+                        onClick={() => setPrintLayout(l as any)}
+                        className={`py-2 rounded border text-[10px] font-bold ${printLayout === l ? 'bg-maroon-dark text-white border-maroon-dark' : 'bg-white text-gray-400 border-gray-100'}`}
+                       >{l} Up</button>
+                     ))}
+                  </div>
+               </div>
+               
+               <div className="space-y-3 p-4 bg-blue-50/50 border border-blue-100 rounded-xl">
+                  <div className="flex items-center justify-between text-blue-800">
+                     <div className="flex items-center gap-2">
+                        <Layers size={14} />
+                        <span className="text-[10px] font-bold uppercase tracking-widest">Duplex Flip Mode</span>
+                     </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                     <button 
+                       onClick={() => setDuplexMode('long-edge')}
+                       className={`py-2 rounded-lg text-[9px] font-bold border transition-all ${duplexMode === 'long-edge' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-500 border-gray-200 hover:border-blue-400'}`}
+                     >
+                       Long Edge Flip (Standard)
+                     </button>
+                     <button 
+                       onClick={() => setDuplexMode('short-edge')}
+                       className={`py-2 rounded-lg text-[9px] font-bold border transition-all ${duplexMode === 'short-edge' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-500 border-gray-200 hover:border-blue-400'}`}
+                     >
+                       Short Edge Flip
+                     </button>
+                  </div>
+                  <p className="text-[8px] text-blue-500/80 leading-relaxed font-medium mt-1">
+                     {duplexMode === 'long-edge' ? 'Mirrors columns on the back page.' : 'Mirrors rows on the back page.'}
+                  </p>
+               </div>
+               
+               <div className="flex items-center justify-between p-3 border border-gray-100 rounded-xl bg-gray-50">
+                  <div className="flex items-center gap-2">
+                     <Settings2 size={12} className={showPrintDebug ? 'text-red-500' : 'text-gray-400'} />
+                     <span className="text-[9px] font-bold uppercase tracking-widest text-gray-600">Alignment Guides</span>
+                  </div>
+                  <button 
+                    onClick={() => setShowPrintDebug(!showPrintDebug)}
+                    className={`relative w-8 h-4 rounded-full transition-colors ${showPrintDebug ? 'bg-green-500' : 'bg-gray-300'}`}
+                  >
+                     <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${showPrintDebug ? 'translate-x-4' : 'translate-x-0'}`}></div>
+                  </button>
+               </div>
+            </section>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-gray-50 space-y-2">
+           <button 
+            onClick={handleSaveTemplate}
+            disabled={isSaving}
+            className={`w-full py-3 rounded-xl font-bold text-[10px] flex items-center justify-center gap-2 transition-all shadow-sm ${saveSuccess ? 'bg-green-500 text-white' : 'bg-gold-metallic text-white hover:bg-gold-deep'}`}
+           >
+              {isSaving ? (
+                <RefreshCw size={16} className="animate-spin" />
+              ) : saveSuccess ? (
+                <Check size={16} />
+              ) : (
+                <Save size={16} />
+              )}
+              {saveSuccess ? 'Design Saved!' : 'Save as New Template'}
+           </button>
+
+           <button 
+            onClick={() => handlePrintA4(printLayout)}
+            disabled={isGeneratingPdf}
+            className="w-full bg-maroon-dark text-white py-3 rounded-xl font-bold text-[10px] flex items-center justify-center gap-2 hover:bg-maroon-deep transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+           >
+              {isGeneratingPdf ? (
+                <RefreshCw size={16} className="animate-spin" />
+              ) : (
+                <Download size={16} />
+              )}
+              {isGeneratingPdf ? 'Generating PDF...' : 'Export High-Res PDF'}
+           </button>
+        </div>
+      </div>
+
+      {/* Main Area */}
+
+      <div className="flex-1 flex flex-col items-center overflow-auto bg-gray-50/50">
+         {viewMode === 'editor' ? (
+           <>
+              <div className="w-full px-6 py-2 flex items-center justify-between border-b border-gray-100 bg-white shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="px-3 py-1 bg-maroon-dark/5 rounded-md border border-maroon-dark/10">
+                       <span className="text-[10px] font-bold text-maroon-dark uppercase tracking-tight">Active Side: {activeSide.toUpperCase()}</span>
+                    </div>
+                    <span className="text-[9px] text-gray-400 font-medium">Click a card below to target design tools</span>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="text-right hidden md:block">
+                      <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">Tag ID Sequence</p>
+                      <p className="text-[10px] font-mono text-gray-500 font-bold">{tagId}</p>
+                    </div>
+                    <div className="w-[1px] h-6 bg-gray-200"></div>
+                    <button onClick={regeneratePreview} className="flex items-center gap-2 px-3 py-1.5 bg-gold-metallic text-white rounded-lg text-[9px] font-bold uppercase transition-transform hover:scale-105">
+                       <Maximize2 size={12} />
+                       Preview Sheet
+                    </button>
+                  </div>
+              </div>
+
+              <div className="flex-1 flex flex-col xl:flex-row items-center justify-center w-full p-8 gap-12 min-h-0 overflow-auto">
+                  {/* Front Side */}
+                  <div className="group relative flex flex-col items-center gap-4">
+                    <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Front Face</h4>
+                    <div 
+                      onClick={() => setActiveSide('front')}
+                      className={`relative bg-white transition-all cursor-pointer ${activeSide === 'front' ? 'shadow-[0_0_50px_rgba(88,0,0,0.15)] ring-4 ring-maroon-dark/10' : 'shadow-xl grayscale-[20%] opacity-60 hover:opacity-100 hover:grayscale-0'}`}
+                      style={{ width: TAG_WIDTH, height: TAG_HEIGHT }}
+                    >
+                      <canvas ref={frontCanvasRef} />
+                      <div className="absolute inset-4 border border-dashed border-maroon-dark/5 pointer-events-none z-30"></div>
+                      
+                      {isUploading.front && (
+                        <div className="absolute inset-0 z-40 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
+                           <RefreshCw className="text-maroon-dark animate-spin" size={32} />
+                           <span className="text-[10px] font-bold text-maroon-dark uppercase tracking-widest">Optimizing Design...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Back Side */}
+                  <div className="group relative flex flex-col items-center gap-4">
+                    <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Back Face</h4>
+                    <div 
+                      onClick={() => setActiveSide('back')}
+                      className={`relative bg-white transition-all cursor-pointer ${activeSide === 'back' ? 'shadow-[0_0_50px_rgba(88,0,0,0.15)] ring-4 ring-maroon-dark/10' : 'shadow-xl grayscale-[20%] opacity-60 hover:opacity-100 hover:grayscale-0'}`}
+                      style={{ width: TAG_WIDTH, height: TAG_HEIGHT }}
+                    >
+                      <canvas ref={backCanvasRef} />
+                      <div className="absolute inset-4 border border-dashed border-maroon-dark/5 pointer-events-none z-30"></div>
+                      
+                      {isUploading.back && (
+                        <div className="absolute inset-0 z-40 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
+                           <RefreshCw className="text-maroon-dark animate-spin" size={32} />
+                           <span className="text-[10px] font-bold text-maroon-dark uppercase tracking-widest">Optimizing Design...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+              </div>
+           </>
+         ) : (
+           <div className="flex-1 w-full flex flex-col items-center p-8 space-y-12 overflow-auto">
+              <div className="flex flex-col xl:flex-row flex-wrap justify-center gap-12 items-center">
+                 <div className="space-y-4 text-center">
+                    <PrintSheetPreview side="front" layout={printLayout} frontImg={previewImages.front} backImg={previewImages.back} />
+                    <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.3em]">Front Page Placement</h4>
+                 </div>
+                 <div className="space-y-4 text-center">
+                    <PrintSheetPreview side="back" layout={printLayout} frontImg={previewImages.front} backImg={previewImages.back} />
+                    <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.3em]">Back Page Placement</h4>
+                 </div>
+                 <div className="space-y-4 text-center">
+                    <PrintSheetPreview side="overlay" layout={printLayout} frontImg={previewImages.front} backImg={previewImages.back} overlay={true} />
+                    <h4 className="text-[10px] font-bold text-maroon-dark uppercase tracking-[0.3em]">Alignment Overlay</h4>
+                    <p className="text-[8px] text-gray-400 max-w-[300px] mx-auto">Verify that front and back tags perfectly overlap in this view. The back side is shown at 50% opacity.</p>
+                 </div>
+              </div>
+              
+              <div className="max-w-2xl bg-white p-8 rounded-3xl border border-gray-100 shadow-sm space-y-6">
+                 <div className="flex items-center gap-4 text-maroon-dark">
+                    <Check className="bg-maroon-dark text-white rounded-full p-1" size={24} />
+                    <div>
+                       <h3 className="font-display text-xl">Print-Ready Verification</h3>
+                       <p className="text-gray-500 text-xs">A4 Sheets aligned for {printLayout}-up duplex output.</p>
+                    </div>
+                 </div>
+                 <div className="grid grid-cols-3 gap-6 pt-4 border-t border-gray-50">
+                    <div>
+                       <p className="text-[8px] font-bold text-gray-400 uppercase mb-1">Margins</p>
+                       <p className="text-[10px] font-bold">Center-Aligned</p>
+                    </div>
+                    <div>
+                       <p className="text-[8px] font-bold text-gray-400 uppercase mb-1">DPI Scale</p>
+                       <p className="text-[10px] font-bold">300 DPI (High-Res)</p>
+                    </div>
+                    <div>
+                       <p className="text-[8px] font-bold text-gray-400 uppercase mb-1">Duplex</p>
+                       <p className="text-[10px] font-bold">Symmetric Flip</p>
+                    </div>
+                 </div>
+                 <button 
+                  onClick={() => setViewMode('editor')}
+                  className="w-full py-3 bg-gray-50 text-gray-500 rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-gray-100 transition-all"
+                 >Return to Editor</button>
+              </div>
+           </div>
+         )}
+      </div>
+
+    </div>
+  );
+}
+
+// Tools and Utilities
+function ToolButton({ icon, label, onClick }: { icon: React.ReactNode, label: string, onClick: () => void }) {
+  return (
+    <button 
+      onClick={onClick}
+      className="flex items-center gap-3 p-3 bg-white border border-gray-100 rounded-xl hover:border-gold-metallic hover:bg-gold-metallic/5 transition-all text-left group shadow-sm hover:shadow-md"
+    >
+      <div className="text-maroon-deep group-hover:scale-110 transition-transform bg-gray-50 p-2 rounded-lg group-hover:bg-white">
+        {icon}
+      </div>
+      <span className="text-[10px] font-bold text-gray-600 uppercase tracking-widest">{label}</span>
+    </button>
+  );
+}

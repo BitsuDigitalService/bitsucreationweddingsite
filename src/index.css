@@ -1,0 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Great+Vibes&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Cormorant+Garamond:ital,wght@0,300..700;1,300..700&family=Poppins:wght@300;400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Great Vibes", cursive;
+  --font-serif: "Playfair Display", serif;
+  --font-garamond: "Cormorant Garamond", serif;
+  --font-sans: "Poppins", sans-serif;
+
+  --color-maroon-dark: #2D0A0A;
+  --color-maroon-deep: #4A0404;
+  --color-gold-light: #F3E5AB;
+  --color-gold-metallic: #D4AF37;
+  --color-gold-dark: #B8860B;
+  --color-ivory: #FDF5E6;
+  --color-blush: #FADADD;
+
+  /* Standard colors to prevent oklch fallbacks */
+  --color-slate-50: #f8fafc;
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-red-500: #ef4444;
+  --color-blue-500: #3b82f6;
+  --color-green-500: #22c55e;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-maroon-dark text-ivory font-sans overflow-x-hidden;
+  }
+}
+
+.glass-morphism {
+  @apply backdrop-blur-md bg-white/10 border border-white/20;
+}
+
+.gold-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(212, 175, 55, 0) 0%,
+    rgba(212, 175, 55, 0.4) 50%,
+    rgba(212, 175, 55, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 3s infinite linear;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.floating-petal {
+  position: fixed;
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-maroon-dark);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-gold-metallic);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-gold-dark);
+}
