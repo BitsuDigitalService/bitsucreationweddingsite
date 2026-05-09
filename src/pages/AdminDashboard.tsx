@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   LayoutDashboard, 
@@ -10,6 +10,7 @@ import {
   Plus, 
   Trash2, 
   CheckCircle2,
+  ShieldCheck,
   Monitor,
   Package,
   QrCode,
@@ -17,6 +18,7 @@ import {
   Filter,
   MoreVertical,
   ChevronRight,
+  ArrowLeft,
   Eye,
   CheckCircle,
   Palette,
@@ -25,12 +27,12 @@ import {
   Heart
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { bagService } from '../services/bagService';
 import { imageService } from '../services/imageService';
 import { WeddingBag, BagStatus } from '../types';
 import { getSupabase } from '../lib/supabase';
-import { clearAdminAuth, saveAdminAuth } from '../lib/adminAuth';
+import { clearAdminAuth, getAdminPassword, getAdminSecurityAnswer, getAdminSecurityQuestion, saveAdminAuth, updateAdminPassword } from '../lib/adminAuth';
 import { useAdminStatus } from '../hooks/useAdminStatus';
 
 const BagScanner = lazy(() => import('../components/BagScanner'));
@@ -46,16 +48,29 @@ function AdminChunkLoader() {
 
 export default function AdminDashboard() {
   const isAuthenticated = useAdminStatus();
-  const [activeTab, setActiveTab] = useState<'overview' | 'gallery' | 'hero' | 'our-story' | 'bags' | 'designer'>(() => {
+  const [activeTab, setActiveTab] = useState<'overview' | 'gallery' | 'hero' | 'our-story' | 'bags' | 'designer' | 'settings'>(() => {
     return 'bags';
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [passkey, setPasskey] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [securityAnswer, setSecurityAnswer] = useState('');
+  const [resetPassword, setResetPassword] = useState('');
+  const [confirmResetPassword, setConfirmResetPassword] = useState('');
+  const [resetError, setResetError] = useState('');
+  const [resetSuccess, setResetSuccess] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
   
-  const { state, updateHeroImage, toggleCountdown, addGalleryItem, deleteGalleryItem, updateCoupleImage } = useApp();
+  const { state, updateHeroImage, toggleCountdown, updateWeddingDate, addGalleryItem, deleteGalleryItem, updateCoupleImage } = useApp();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const wasAuthenticatedRef = useRef(isAuthenticated);
 
   useEffect(() => {
     if (searchParams.get('scan') === 'true') {
@@ -67,7 +82,7 @@ export default function AdminDashboard() {
   }, [searchParams, setSearchParams]);
 
   const handleLogin = () => {
-    if (passkey === '1234') { // Default wedding passkey
+    if (passkey === getAdminPassword()) {
       const shouldOpenScanner = searchParams.get('scan') === 'true';
       saveAdminAuth();
       setActiveTab('bags');
@@ -85,10 +100,76 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleLogout = () => {
-     clearAdminAuth();
-     navigate('/');
+  const handlePasswordChange = () => {
+    setPasswordMessage(null);
+    setPasswordError(null);
+
+    if (currentPassword !== getAdminPassword()) {
+      setPasswordError('Current password is incorrect.');
+      return;
+    }
+
+    if (newPassword.length < 4) {
+      setPasswordError('New password must be at least 4 characters.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New password and confirm password do not match.');
+      return;
+    }
+
+    updateAdminPassword(newPassword);
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordMessage('Admin password updated successfully.');
   };
+
+  const handleForgotPasswordReset = () => {
+    setResetError('');
+    setResetSuccess('');
+
+    if (securityAnswer.trim().toLowerCase() !== getAdminSecurityAnswer()) {
+      setResetError('Security answer is incorrect.');
+      return;
+    }
+
+    if (resetPassword.length < 4) {
+      setResetError('New password must be at least 4 characters.');
+      return;
+    }
+
+    if (resetPassword !== confirmResetPassword) {
+      setResetError('New password and confirm password do not match.');
+      return;
+    }
+
+    updateAdminPassword(resetPassword);
+    setSecurityAnswer('');
+    setResetPassword('');
+    setConfirmResetPassword('');
+    setResetSuccess('Password reset successful. You can log in now.');
+    setShowForgotPassword(false);
+  };
+
+  const handleLogout = () => {
+     setIsSidebarOpen(false);
+     clearAdminAuth();
+     navigate('/', { replace: true });
+  };
+
+  const handleExitAdmin = () => {
+    setIsSidebarOpen(false);
+    navigate('/');
+  };
+
+  useEffect(() => {
+    if (wasAuthenticatedRef.current && !isAuthenticated && location.pathname.startsWith('/admin')) {
+      navigate('/', { replace: true });
+    }
+    wasAuthenticatedRef.current = isAuthenticated;
+  }, [isAuthenticated, location.pathname, navigate]);
 
   const [bags, setBags] = useState<WeddingBag[]>([]);
   const [loadingBags, setLoadingBags] = useState(false);
@@ -132,6 +213,44 @@ export default function AdminDashboard() {
   const [galleryUploadFolder, setGalleryUploadFolder] = useState<string>('');
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
+
+  const totalScans = bags.reduce((acc, curr) => acc + (curr.scan_count || 0), 0);
+  const activeBags = bags.filter(b => b.bag_status === 'active').length;
+  const collectedBags = bags.filter(b => b.bag_status === 'collected').length;
+  const pendingPrintBags = bags.filter(b => b.print_status === 'pending').length;
+  const printedBags = bags.filter(b => b.print_status === 'printed').length;
+  const collectionRate = bags.length > 0 ? Math.round((collectedBags / bags.length) * 100) : 0;
+
+  const recentActivity = bags
+    .flatMap((bag) => {
+      const activity = [];
+
+      activity.push({
+        id: `${bag.id}-created`,
+        label: `Tag #${bag.unique_tag_code.split('/').pop()} registered for ${bag.guest_name}`,
+        time: bag.created_at
+      });
+
+      if (bag.last_scanned_at) {
+        activity.push({
+          id: `${bag.id}-scanned`,
+          label: `Tag #${bag.unique_tag_code.split('/').pop()} scanned ${bag.scan_count || 0} time${(bag.scan_count || 0) === 1 ? '' : 's'}`,
+          time: bag.last_scanned_at
+        });
+      }
+
+      if (bag.collected_at) {
+        activity.push({
+          id: `${bag.id}-collected`,
+          label: `Bag for ${bag.guest_name} marked as collected`,
+          time: bag.collected_at
+        });
+      }
+
+      return activity;
+    })
+    .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+    .slice(0, 8);
 
   const fetchExistingImages = async () => {
     setIsFetchingImages(true);
@@ -410,6 +529,9 @@ export default function AdminDashboard() {
                {loginError && (
                  <p className="px-1 text-[11px] font-bold text-red-500">{loginError}</p>
                )}
+               {resetSuccess && (
+                 <p className="px-1 text-[11px] font-bold text-green-600">{resetSuccess}</p>
+               )}
             </div>
             
             <button 
@@ -418,6 +540,83 @@ export default function AdminDashboard() {
             >
               Access Dashboard
             </button>
+
+            <button
+              onClick={() => {
+                setShowForgotPassword(prev => !prev);
+                setResetError('');
+                setResetSuccess('');
+              }}
+              className="w-full text-[11px] font-bold uppercase tracking-widest text-maroon-dark/70 hover:text-maroon-dark transition-colors"
+            >
+              {showForgotPassword ? 'Close Reset' : 'Forgot Password'}
+            </button>
+
+            <AnimatePresence>
+              {showForgotPassword && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="rounded-[2rem] border border-gold-metallic/15 bg-gold-metallic/5 p-5 space-y-4"
+                >
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">Security Question</p>
+                    <p className="text-sm font-semibold text-maroon-dark">{getAdminSecurityQuestion()}</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase text-gray-400 px-1">Answer</label>
+                    <input
+                      type="text"
+                      value={securityAnswer}
+                      onChange={(e) => {
+                        setSecurityAnswer(e.target.value);
+                        if (resetError) setResetError('');
+                      }}
+                      className="w-full rounded-2xl border border-gray-200 bg-white px-5 py-4 text-center text-sm text-maroon-dark outline-none transition-all focus:ring-2 focus:ring-gold-metallic/20"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase text-gray-400 px-1">New Password</label>
+                    <input
+                      type="password"
+                      value={resetPassword}
+                      onChange={(e) => {
+                        setResetPassword(e.target.value);
+                        if (resetError) setResetError('');
+                      }}
+                      className="w-full rounded-2xl border border-gray-200 bg-white px-5 py-4 text-center text-sm text-maroon-dark outline-none transition-all focus:ring-2 focus:ring-gold-metallic/20"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase text-gray-400 px-1">Confirm Password</label>
+                    <input
+                      type="password"
+                      value={confirmResetPassword}
+                      onChange={(e) => {
+                        setConfirmResetPassword(e.target.value);
+                        if (resetError) setResetError('');
+                      }}
+                      className="w-full rounded-2xl border border-gray-200 bg-white px-5 py-4 text-center text-sm text-maroon-dark outline-none transition-all focus:ring-2 focus:ring-gold-metallic/20"
+                    />
+                  </div>
+
+                  {resetError ? (
+                    <p className="px-1 text-[11px] font-bold text-red-500">{resetError}</p>
+                  ) : null}
+
+                  <button
+                    onClick={handleForgotPasswordReset}
+                    className="w-full rounded-2xl bg-gold-metallic py-4 text-xs font-bold uppercase tracking-widest text-maroon-dark transition-all hover:bg-gold-deep"
+                  >
+                    Reset Password
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           <p className="mt-10 text-center text-[10px] text-gray-300 font-bold uppercase tracking-tighter">
@@ -492,16 +691,23 @@ export default function AdminDashboard() {
             onClick={() => { setActiveTab('designer'); setIsSidebarOpen(false); }} 
           />
           <div className="pt-8 pb-2 px-4 text-[10px] font-bold text-ivory/30 uppercase tracking-widest">Settings</div>
-          <SidebarLink icon={Settings} label="General Settings" active={false} onClick={() => {}} />
+          <SidebarLink icon={Settings} label="General Settings" active={activeTab === 'settings'} onClick={() => { setActiveTab('settings'); setIsSidebarOpen(false); }} />
         </nav>
 
-        <div className="p-4 border-t border-white/10">
+        <div className="p-4 border-t border-white/10 space-y-2">
+          <button 
+            onClick={handleExitAdmin}
+            className="w-full flex items-center gap-3 p-3 text-ivory/60 hover:text-white transition-colors"
+          >
+            <ArrowLeft size={18} />
+            <span className="text-sm font-medium">Exit Admin</span>
+          </button>
           <button 
             onClick={handleLogout}
             className="w-full flex items-center gap-3 p-3 text-ivory/60 hover:text-white transition-colors"
           >
             <LogOut size={18} />
-            <span className="text-sm font-medium">Exit Admin</span>
+            <span className="text-sm font-medium">Logout</span>
           </button>
         </div>
       </aside>
@@ -558,33 +764,64 @@ export default function AdminDashboard() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6">
                <StatCard title="Photos" value={state.gallery.length} color="bg-blue-500" />
                <StatCard title="Total Bags" value={bags.length} color="bg-gold-metallic" />
-               <StatCard title="Active" value={bags.filter(b => b.bag_status === 'active').length} color="bg-green-500" />
-               <StatCard title="Collected" value={bags.filter(b => b.bag_status === 'collected').length} color="bg-maroon-deep" />
+               <StatCard title="Active" value={activeBags} color="bg-green-500" />
+               <StatCard title="Collected" value={collectedBags} color="bg-maroon-deep" />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 md:p-8">
                   <h3 className="text-lg font-bold mb-4">Bag Analytics</h3>
                   <div className="flex items-center justify-between py-4 border-b border-gray-50">
                      <span className="text-gray-500 text-sm">Total Page Views (Scans)</span>
-                     <span className="font-bold text-maroon-dark">{bags.reduce((acc, curr) => acc + (curr.scan_count || 0), 0)}</span>
+                     <span className="font-bold text-maroon-dark">{totalScans}</span>
                   </div>
                   <div className="flex items-center justify-between py-4 border-b border-gray-50">
                      <span className="text-gray-500 text-sm">Tags Pending Print</span>
-                     <span className="font-bold text-gold-metallic">{bags.filter(b => b.print_status === 'pending').length}</span>
+                     <span className="font-bold text-gold-metallic">{pendingPrintBags}</span>
+                  </div>
+                  <div className="flex items-center justify-between py-4 border-b border-gray-50">
+                     <span className="text-gray-500 text-sm">Tags Printed</span>
+                     <span className="font-bold text-blue-500">{printedBags}</span>
                   </div>
                   <div className="flex items-center justify-between py-4">
                      <span className="text-gray-500 text-sm">Collection Rate</span>
-                     <span className="font-bold text-green-500">
-                        {bags.length > 0 ? Math.round((bags.filter(b => b.bag_status === 'collected').length / bags.length) * 100) : 0}%
-                     </span>
+                     <span className="font-bold text-green-500">{collectionRate}%</span>
+                  </div>
+               </div>
+
+               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 md:p-8">
+                  <h3 className="text-lg font-bold mb-4">Tag Status Details</h3>
+                  <div className="space-y-4">
+                     <div className="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3">
+                        <span className="text-sm font-medium text-gray-500">Active Tags</span>
+                        <span className="font-bold text-green-600">{activeBags}</span>
+                     </div>
+                     <div className="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3">
+                        <span className="text-sm font-medium text-gray-500">Collected Tags</span>
+                        <span className="font-bold text-maroon-deep">{collectedBags}</span>
+                     </div>
+                     <div className="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3">
+                        <span className="text-sm font-medium text-gray-500">Pending Print</span>
+                        <span className="font-bold text-gold-metallic">{pendingPrintBags}</span>
+                     </div>
+                     <div className="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3">
+                        <span className="text-sm font-medium text-gray-500">Printed Tags</span>
+                        <span className="font-bold text-blue-600">{printedBags}</span>
+                     </div>
+                     <div className="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3">
+                        <span className="text-sm font-medium text-gray-500">Average Scans Per Tag</span>
+                        <span className="font-bold text-maroon-dark">{bags.length ? (totalScans / bags.length).toFixed(1) : '0.0'}</span>
+                     </div>
                   </div>
                </div>
                
                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 md:p-8 flex items-center justify-between">
-                  <div>
+                  <div className="pr-4">
                      <h3 className="text-lg font-bold text-gray-800">Wedding Countdown</h3>
                      <p className="text-sm text-gray-500">Show or hide the countdown timer on home page.</p>
+                     <p className="mt-2 text-xs font-semibold text-maroon-dark">
+                       Wedding Date: {new Date(state.weddingDate).toLocaleString()}
+                     </p>
                   </div>
                   <button 
                   onClick={() => toggleCountdown(!state.showCountdown)}
@@ -602,11 +839,15 @@ export default function AdminDashboard() {
             </div>
             
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 md:p-8">
-               <h3 className="text-lg md:text-xl font-bold mb-6">Recent Activity</h3>
+               <h3 className="text-lg md:text-xl font-bold mb-6">Recent Activity Log</h3>
                <div className="space-y-4">
-                  <ActivityItem label="Hero image updated" time="2 hours ago" />
-                  <ActivityItem label="New photo added to Gallery" time="5 hours ago" />
-                  <ActivityItem label="RSVP settings modified" time="1 day ago" />
+                  {recentActivity.length ? (
+                    recentActivity.map((item) => (
+                      <ActivityItem key={item.id} label={item.label} time={formatActivityTime(item.time)} />
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-400">No tag activity available yet.</p>
+                  )}
                </div>
             </div>
           </div>
@@ -1205,6 +1446,96 @@ export default function AdminDashboard() {
           </Suspense>
         )}
 
+        {activeTab === 'settings' && (
+          <section className="max-w-3xl px-4 pb-10">
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-[2rem] border border-gold-metallic/10 bg-white p-8 shadow-sm"
+            >
+              <div className="mb-8 flex items-start gap-4">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-maroon-dark/5 text-maroon-dark">
+                  <ShieldCheck size={22} />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-800">Admin Security</h3>
+                  <p className="text-sm text-gray-500">Change the admin login password used to access the dashboard.</p>
+                </div>
+              </div>
+
+              <div className="space-y-5">
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Wedding Date And Time</label>
+                  <input
+                    type="datetime-local"
+                    value={state.weddingDate}
+                    onChange={(e) => updateWeddingDate(e.target.value)}
+                    className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-5 py-4 text-sm text-maroon-dark outline-none transition-all focus:ring-2 focus:ring-gold-metallic/20"
+                  />
+                  <p className="text-xs text-gray-400">This value controls the live countdown shown on the home page.</p>
+                </div>
+
+                <div className="border-t border-gray-100 pt-5 space-y-5">
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Current Password</label>
+                  <input
+                    type="password"
+                    value={currentPassword}
+                    onChange={(e) => {
+                      setCurrentPassword(e.target.value);
+                      if (passwordError) setPasswordError(null);
+                      if (passwordMessage) setPasswordMessage(null);
+                    }}
+                    className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-5 py-4 text-sm text-maroon-dark outline-none transition-all focus:ring-2 focus:ring-gold-metallic/20"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold uppercase tracking-widest text-gray-400">New Password</label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => {
+                      setNewPassword(e.target.value);
+                      if (passwordError) setPasswordError(null);
+                      if (passwordMessage) setPasswordMessage(null);
+                    }}
+                    className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-5 py-4 text-sm text-maroon-dark outline-none transition-all focus:ring-2 focus:ring-gold-metallic/20"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Confirm New Password</label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => {
+                      setConfirmPassword(e.target.value);
+                      if (passwordError) setPasswordError(null);
+                      if (passwordMessage) setPasswordMessage(null);
+                    }}
+                    className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-5 py-4 text-sm text-maroon-dark outline-none transition-all focus:ring-2 focus:ring-gold-metallic/20"
+                  />
+                </div>
+
+                {passwordError ? (
+                  <p className="text-sm font-bold text-red-500">{passwordError}</p>
+                ) : null}
+                {passwordMessage ? (
+                  <p className="text-sm font-bold text-green-600">{passwordMessage}</p>
+                ) : null}
+
+                <button
+                  onClick={handlePasswordChange}
+                  className="inline-flex items-center gap-2 rounded-full bg-maroon-dark px-6 py-3 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-maroon-deep"
+                >
+                  <ShieldCheck size={16} />
+                  Update Password
+                </button>
+                </div>
+              </div>
+            </motion.div>
+          </section>
+        )}
+
         {/* Modals & Scanning Overlays */}
         <AnimatePresence>
           {isScannerOpen && (
@@ -1357,6 +1688,23 @@ function StatCard({ title, value, color }: any) {
       <div className={`w-12 h-12 ${color} rounded-xl opacity-10`}></div>
     </div>
   );
+}
+
+function formatActivityTime(timestamp: string) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return 'Unknown time';
+
+  const diffMs = Date.now() - date.getTime();
+  const diffMinutes = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes} min ago`;
+  if (diffHours < 24) return `${diffHours} hr ago`;
+  if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+
+  return date.toLocaleString();
 }
 
 function ActivityItem({ label, time }: any) {

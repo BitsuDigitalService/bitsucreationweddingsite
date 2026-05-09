@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Crown, Menu, X } from 'lucide-react';
-import { Link, useLocation } from 'react-router-dom';
+import { Crown, LogOut, Menu, X } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAdminStatus } from '../hooks/useAdminStatus';
+import { clearAdminAuth } from '../lib/adminAuth';
 
 export default function Navbar() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const isAdmin = useAdminStatus();
 
   useEffect(() => {
@@ -36,6 +38,12 @@ export default function Navbar() {
         element.scrollIntoView({ behavior: 'smooth' });
       }
     }
+  };
+
+  const handleLogout = () => {
+    setIsMenuOpen(false);
+    clearAdminAuth();
+    navigate('/');
   };
 
   return (
@@ -81,6 +89,16 @@ export default function Navbar() {
 
         {/* Right Actions */}
         <div className="flex items-center gap-4">
+          {isAdmin ? (
+            <button
+              onClick={handleLogout}
+              className="hidden md:inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.25em] text-ivory/80 transition-colors hover:border-gold-metallic/40 hover:text-gold-metallic"
+            >
+              <LogOut size={14} />
+              Logout
+            </button>
+          ) : null}
+
           {/* Mobile Menu Toggle */}
           <button 
             className="md:hidden text-ivory p-2"
@@ -110,6 +128,15 @@ export default function Navbar() {
                 {link.name}
               </Link>
             ))}
+            {isAdmin ? (
+              <button
+                onClick={handleLogout}
+                className="mt-2 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-5 py-3 text-ivory text-base uppercase tracking-widest font-medium hover:text-gold-metallic transition-colors"
+              >
+                <LogOut size={18} />
+                Logout
+              </button>
+            ) : null}
           </motion.div>
         )}
       </AnimatePresence>

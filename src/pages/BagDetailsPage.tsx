@@ -30,29 +30,39 @@ export default function BagDetailsPage() {
   const isAdmin = useAdminStatus();
 
   useEffect(() => {
+    if (!tagCode) {
+      setLoading(false);
+      return;
+    }
+
     async function fetchBag() {
-      if (tagCode) {
-        try {
-          setError(null);
-          const data = await bagService.getBagByCode(tagCode);
-          setBag(data);
-          if (data) {
-            await bagService.incrementScanCount(tagCode);
-          }
-        } catch (err: any) {
-          console.error(err);
-          if (err.message.includes('Permission') || err.message.includes('RLS')) {
-            setError("PERMISSION ERROR: The database is restricting access. Please ensure the 'bags' table has public RLS policies enabled.");
-          } else {
-            setError("Failed to load bag details.");
-          }
+      try {
+        setError(null);
+        const data = await bagService.getBagByCode(tagCode);
+        setBag(data);
+        if (data) {
+          await bagService.incrementScanCount(tagCode);
+        }
+      } catch (err: any) {
+        console.error(err);
+        if (err.message.includes('Permission') || err.message.includes('RLS')) {
+          setError("PERMISSION ERROR: The database is restricting access. Please ensure the 'bags' table has public RLS policies enabled.");
+        } else {
+          setError("Failed to load bag details.");
         }
       }
       setLoading(false);
     }
+
     fetchBag();
     window.scrollTo(0, 0);
   }, [tagCode]);
+
+  useEffect(() => {
+    if (!loading && !isAdmin && !error && !bag) {
+      navigate('/', { replace: true });
+    }
+  }, [bag, error, isAdmin, loading, navigate]);
 
   const handleUpdateStatus = async (status: BagStatus) => {
     if (!bag) return;

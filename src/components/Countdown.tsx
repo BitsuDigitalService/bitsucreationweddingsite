@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { WEDDING_DATE } from '../constants';
+import { useApp } from '../context/AppContext';
 
 export default function Countdown() {
-  const [timeLeft, setTimeLeft] = useState(calculateTimeLeft());
+  const { state } = useApp();
+  const [timeLeft, setTimeLeft] = useState(calculateTimeLeft(state.weddingDate));
 
-  function calculateTimeLeft() {
-    const difference = +WEDDING_DATE - +new Date();
+  function calculateTimeLeft(weddingDate: string) {
+    const targetDate = new Date(weddingDate);
+    const difference = +targetDate - +new Date();
     let timeLeft = { days: 0, hours: 0, minutes: 0, seconds: 0 };
 
     if (difference > 0) {
@@ -22,10 +24,10 @@ export default function Countdown() {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setTimeLeft(calculateTimeLeft());
+      setTimeLeft(calculateTimeLeft(state.weddingDate));
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [state.weddingDate]);
 
   const items = [
     { label: 'Days', value: timeLeft.days },

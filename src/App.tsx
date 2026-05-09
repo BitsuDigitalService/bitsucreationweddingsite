@@ -3,18 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { Analytics } from '@vercel/analytics/react';
 import Navbar from './components/Navbar';
 import Home from './pages/Home';
 import { AppProvider } from './context/AppContext';
 import { QrCode } from 'lucide-react';
+import NotFoundPage from './pages/NotFoundPage';
 import { useAdminStatus } from './hooks/useAdminStatus';
 
 const GalleryPage = lazy(() => import('./pages/GalleryPage'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 const BagDetailsPage = lazy(() => import('./pages/BagDetailsPage'));
 const QuickUpload = lazy(() => import('./components/QuickUpload'));
+const BagScanner = lazy(() => import('./components/BagScanner'));
 
 function RouteLoader() {
   return (
@@ -28,17 +31,39 @@ function QuickScanButton() {
   const isAdmin = useAdminStatus();
   const navigate = useNavigate();
   const location = useLocation();
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
 
-  if (location.pathname.startsWith('/admin')) return null;
+  if (!isAdmin || location.pathname.startsWith('/admin')) return null;
+
+  const handleScan = (scannedValue: string) => {
+    setIsScannerOpen(false);
+
+    try {
+      const parsedUrl = new URL(scannedValue);
+      navigate(`${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`);
+      return;
+    } catch {
+      const cleanedValue = scannedValue.trim().replace(/^#/, '');
+      navigate(`/bags/${encodeURIComponent(cleanedValue)}`);
+    }
+  };
 
   return (
-    <button 
-      onClick={() => navigate(isAdmin ? '/admin?scan=true' : '/admin')}
-      className="fixed bottom-5 right-4 md:bottom-10 md:right-10 z-[100] flex h-16 w-16 items-center justify-center rounded-full border-4 border-maroon-dark bg-gold-metallic text-maroon-dark shadow-2xl shadow-gold-metallic/50 transition-transform hover:scale-110"
-      title={isAdmin ? 'Quick Scan' : 'Admin Login Required'}
-    >
-      <QrCode size={28} />
-    </button>
+    <>
+      <button 
+        onClick={() => setIsScannerOpen(true)}
+        className="fixed bottom-5 right-4 md:bottom-10 md:right-10 z-[100] flex h-16 w-16 items-center justify-center rounded-full border-4 border-maroon-dark bg-gold-metallic text-maroon-dark shadow-2xl shadow-gold-metallic/50 transition-transform hover:scale-110"
+        title="Quick Scan"
+      >
+        <QrCode size={28} />
+      </button>
+
+      <Suspense fallback={null}>
+        {isScannerOpen ? (
+          <BagScanner onScan={handleScan} onClose={() => setIsScannerOpen(false)} />
+        ) : null}
+      </Suspense>
+    </>
   );
 }
 
@@ -55,6 +80,7 @@ export default function App() {
               <Route path="/gallery" element={<GalleryPage />} />
               <Route path="/admin" element={<AdminDashboard />} />
               <Route path="/bags/:tagCode" element={<BagDetailsPage />} />
+              <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </Suspense>
           
@@ -70,6 +96,7 @@ export default function App() {
         <Suspense fallback={null}>
           <QuickUpload />
         </Suspense>
+        <Analytics />
       </Router>
     </AppProvider>
   );

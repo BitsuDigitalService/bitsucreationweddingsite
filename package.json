@@ -15,6 +15,7 @@
     "@google/genai": "^1.29.0",
     "@supabase/supabase-js": "^2.105.3",
     "@tailwindcss/vite": "^4.1.14",
+    "@vercel/analytics": "^1.5.0",
     "@vitejs/plugin-react": "^5.0.4",
     "@yudiel/react-qr-scanner": "^2.5.1",
     "dotenv": "^17.2.3",

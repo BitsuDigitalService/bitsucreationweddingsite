@@ -5,6 +5,7 @@ import { imageService } from './imageService';
 export interface SiteSettings {
   heroImage: string;
   showCountdown: boolean;
+  weddingDate: string;
   couple1Image: string;
   couple2Image: string;
 }
@@ -14,6 +15,7 @@ const SETTINGS_ROW_ID = 'default';
 export const defaultSiteSettings: SiteSettings = {
   heroImage: 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&q=80&w=2000',
   showCountdown: true,
+  weddingDate: '2026-05-14T22:00',
   couple1Image: COUPLE_1.imageUrl,
   couple2Image: COUPLE_2.imageUrl,
 };
@@ -27,6 +29,7 @@ function mapRowToSettings(row: any): SiteSettings {
   return {
     heroImage: cleanUrl(row?.hero_image, defaultSiteSettings.heroImage),
     showCountdown: typeof row?.show_countdown === 'boolean' ? row.show_countdown : defaultSiteSettings.showCountdown,
+    weddingDate: typeof row?.wedding_date === 'string' && row.wedding_date ? row.wedding_date : defaultSiteSettings.weddingDate,
     couple1Image: cleanUrl(row?.couple1_image, defaultSiteSettings.couple1Image),
     couple2Image: cleanUrl(row?.couple2_image, defaultSiteSettings.couple2Image),
   };
@@ -72,6 +75,7 @@ export const siteSettingsService = {
     const row: Record<string, unknown> = { id: SETTINGS_ROW_ID };
     if (patch.heroImage !== undefined) row.hero_image = patch.heroImage;
     if (patch.showCountdown !== undefined) row.show_countdown = patch.showCountdown;
+    if (patch.weddingDate !== undefined) row.wedding_date = patch.weddingDate;
     if (patch.couple1Image !== undefined) row.couple1_image = patch.couple1Image;
     if (patch.couple2Image !== undefined) row.couple2_image = patch.couple2Image;
 

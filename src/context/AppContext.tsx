@@ -1,12 +1,13 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { Couple, EventDetail, GalleryItem } from '../types';
-import { COUPLE_1, COUPLE_2, EVENTS, GALLERY, WEDDING_DATE } from '../constants';
+import { COUPLE_1, COUPLE_2, EVENTS, GALLERY } from '../constants';
 import { getSupabase } from '../lib/supabase';
 import { defaultSiteSettings, siteSettingsService } from '../services/siteSettingsService';
 
 interface AppState {
   heroImage: string;
   showCountdown: boolean;
+  weddingDate: string;
   gallery: GalleryItem[];
   events: EventDetail[];
   couples: {
@@ -19,6 +20,7 @@ interface AppContextType {
   state: AppState;
   updateHeroImage: (url: string) => void;
   toggleCountdown: (enabled: boolean) => void;
+  updateWeddingDate: (weddingDate: string) => void;
   addGalleryItem: (item: GalleryItem) => void;
   deleteGalleryItem: (index: number) => void;
   updateCoupleImage: (coupleId: 'couple1' | 'couple2', url: string) => void;
@@ -30,6 +32,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>({
     heroImage: defaultSiteSettings.heroImage,
     showCountdown: defaultSiteSettings.showCountdown,
+    weddingDate: defaultSiteSettings.weddingDate,
     gallery: GALLERY,
     events: EVENTS,
     couples: {
@@ -49,6 +52,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...prev,
         heroImage: settings.heroImage,
         showCountdown: settings.showCountdown,
+        weddingDate: settings.weddingDate,
         couples: {
           couple1: { ...prev.couples.couple1, imageUrl: settings.couple1Image },
           couple2: { ...prev.couples.couple2, imageUrl: settings.couple2Image },
@@ -77,6 +81,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const toggleCountdown = (enabled: boolean) => {
     setState(prev => ({ ...prev, showCountdown: enabled }));
     void siteSettingsService.updateSiteSettings({ showCountdown: enabled });
+  };
+
+  const updateWeddingDate = (weddingDate: string) => {
+    setState(prev => ({ ...prev, weddingDate }));
+    void siteSettingsService.updateSiteSettings({ weddingDate });
   };
 
   const addGalleryItem = (item: GalleryItem) => {
@@ -108,7 +117,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AppContext.Provider value={{ state, updateHeroImage, toggleCountdown, addGalleryItem, deleteGalleryItem, updateCoupleImage }}>
+    <AppContext.Provider value={{ state, updateHeroImage, toggleCountdown, updateWeddingDate, addGalleryItem, deleteGalleryItem, updateCoupleImage }}>
       {children}
     </AppContext.Provider>
   );

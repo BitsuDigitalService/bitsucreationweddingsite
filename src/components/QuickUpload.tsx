@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Camera, FolderPlus, Upload, X, Check, ChevronDown, Loader2 } from 'lucide-react';
 import { imageService } from '../services/imageService';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { useAdminStatus } from '../hooks/useAdminStatus';
 
 export default function QuickUpload() {
@@ -20,7 +20,6 @@ export default function QuickUpload() {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
-  const navigate = useNavigate();
 
   // Load folders from Supabase when panel opens
   useEffect(() => {
@@ -82,7 +81,7 @@ export default function QuickUpload() {
     e.target.value = '';
   };
 
-  if (location.pathname.startsWith('/admin')) return null;
+  if (!isAdmin || location.pathname.startsWith('/admin')) return null;
 
   return (
     <div className="fixed bottom-5 right-24 md:bottom-10 md:right-[7rem] z-[100] flex flex-col items-end gap-3">
@@ -226,15 +225,9 @@ export default function QuickUpload() {
       <motion.button
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.95 }}
-        onClick={() => {
-          if (!isAdmin) {
-            navigate('/admin');
-            return;
-          }
-          setIsOpen(v => !v);
-        }}
+        onClick={() => setIsOpen(v => !v)}
         className="relative flex h-14 w-14 items-center justify-center rounded-full border-4 border-gold-metallic/30 bg-maroon-dark text-gold-metallic shadow-2xl shadow-maroon-dark/40"
-        title={isAdmin ? 'Quick Upload' : 'Admin Login Required'}
+        title="Quick Upload"
       >
         <AnimatePresence mode="wait">
           {isOpen ? (
