@@ -30,7 +30,6 @@
     "qrcode.react": "^4.2.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "react-qr-scanner": "^1.0.0-alpha.11",
     "react-router-dom": "^7.15.0",
     "vite": "^6.2.3"
   },
