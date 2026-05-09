@@ -312,14 +312,15 @@ export default function AdminDashboard() {
     setGalleryLoading(false);
   };
 
-  const handleGalleryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const handleGalleryUpload = async (e: import('react').ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.currentTarget.files;
+    const files: File[] = fileList ? Array.from(fileList) : [];
     if (!files.length || !galleryUploadFolder) return;
     setGalleryUploading(true);
     await Promise.all(files.map(f => imageService.uploadGalleryImage(f, galleryUploadFolder)));
     await loadGalleryImages();
     setGalleryUploading(false);
-    e.target.value = '';
+    e.currentTarget.value = '';
   };
 
   const handleDeleteGalleryImage = async (path: string, id?: string) => {

@@ -223,7 +223,7 @@ function FlourishDivider() {
   );
 }
 
-function FramedBox({ children }: { children: React.ReactNode }) {
+function FramedBox({ children }: { children: import('react').ReactNode }) {
   return (
     <div className="w-full max-w-3xl mx-auto my-6 relative p-6 md:p-8 flex justify-center items-center bg-maroon-deep/30">
       {/* Complex framed borders */}

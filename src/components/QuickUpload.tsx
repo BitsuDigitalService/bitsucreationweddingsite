@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Camera, FolderPlus, Upload, X, Check, ChevronDown, Loader2 } from 'lucide-react';
 import { imageService } from '../services/imageService';
@@ -65,8 +65,9 @@ export default function QuickUpload() {
     setCreatingFolder(false);
   };
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const handleUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.currentTarget.files;
+    const files: File[] = fileList ? Array.from(fileList) : [];
     if (!files.length || !selectedFolder) return;
     setUploading(true);
     setUploadedCount(0);
@@ -78,7 +79,7 @@ export default function QuickUpload() {
     setUploading(false);
     setSuccess(true);
     setTimeout(() => { setSuccess(false); setIsOpen(false); }, 2000);
-    e.target.value = '';
+    e.currentTarget.value = '';
   };
 
   if (!isAdmin || location.pathname.startsWith('/admin')) return null;
