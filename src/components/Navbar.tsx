@@ -49,21 +49,13 @@ export default function Navbar() {
   return (
     <nav 
       className={`fixed top-0 left-0 w-full z-[1000] transition-all duration-500 ${
-        isScrolled ? 'py-2 glass-morphism' : 'py-6 bg-transparent'
+        location.pathname !== '/' || isScrolled 
+          ? 'py-3 bg-maroon-dark/95 backdrop-blur-md border-b border-gold-metallic/15 shadow-lg' 
+          : 'py-6 bg-transparent'
       }`}
     >
       <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
         <div className="min-w-[120px] flex items-center">
-          {isAdmin ? (
-            <motion.div
-              initial={{ opacity: 0, x: -12 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="inline-flex items-center gap-2 rounded-full border border-gold-metallic/30 bg-maroon-dark/60 px-3 py-1.5 text-gold-metallic backdrop-blur-sm"
-            >
-              <Crown size={14} />
-              <span className="text-[10px] font-bold uppercase tracking-[0.3em]">Admin</span>
-            </motion.div>
-          ) : null}
         </div>
 
         {/* Desktop Links */}
@@ -116,13 +108,11 @@ export default function Navbar() {
             initial={{ opacity: 0, y: -100 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -100 }}
-            className="fixed inset-0 top-0 left-0 w-full h-[60vh] glass-morphism z-[-1] flex flex-col items-center justify-center gap-6 pt-16 rounded-b-[40px]"
+            className="fixed inset-0 top-0 left-0 w-full h-[60vh] bg-maroon-dark/95 backdrop-blur-md border-b border-gold-metallic/15 z-[-1] flex flex-col items-center justify-center gap-6 pt-16 rounded-b-[40px]"
           >
             {navLinks.map((link) => (
               <Link
                 key={link.name}
-                to={link.href}
-                onClick={() => handleLinkClick(link.href)}
                 className="text-ivory text-xl uppercase tracking-widest font-medium hover:text-gold-metallic transition-colors"
               >
                 {link.name}

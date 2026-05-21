@@ -24,7 +24,9 @@ import {
   Palette,
   AlertCircle,
   RotateCcw,
-  Heart
+  Heart,
+  Film,
+  Play
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -34,6 +36,8 @@ import { WeddingBag, BagStatus } from '../types';
 import { getSupabase } from '../lib/supabase';
 import { clearAdminAuth, getAdminPassword, getAdminSecurityAnswer, getAdminSecurityQuestion, saveAdminAuth, updateAdminPassword } from '../lib/adminAuth';
 import { useAdminStatus } from '../hooks/useAdminStatus';
+import { videoService, type GalleryVideo } from '../services/imageService';
+import { parseCategory, formatCategory, getCoupleDisplay, type GalleryCouple } from '../lib/galleryHelper';
 
 const BagScanner = lazy(() => import('../components/BagScanner'));
 const TagDesigner = lazy(() => import('../components/TagDesigner'));
@@ -197,7 +201,6 @@ export default function AdminDashboard() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
-
   const [existingImages, setExistingImages] = useState<string[]>([]);
   const [isFetchingImages, setIsFetchingImages] = useState(false);
   const [showImageSelector, setShowImageSelector] = useState<'couple1' | 'couple2' | null>(null);
@@ -213,6 +216,27 @@ export default function AdminDashboard() {
   const [galleryUploadFolder, setGalleryUploadFolder] = useState<string>('');
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
+
+  const [galleryFilterCouple, setGalleryFilterCouple] = useState<GalleryCouple>('sandeep_asha');
+  const [galleryUploadCouple, setGalleryUploadCouple] = useState<GalleryCouple>('sandeep_asha');
+  const [gallerySubTab, setGallerySubTab] = useState<'photos' | 'reels'>('photos');
+
+  // Reset upload folder if couple changes
+  useEffect(() => {
+    setGalleryUploadFolder('');
+    setVideoUploadFolder('');
+  }, [galleryUploadCouple]);
+
+  // ── Video / Reels management state ───────────────────────────────────────
+  const [galleryVideos, setGalleryVideos] = useState<GalleryVideo[]>([]);
+  const [videoUploadFolder, setVideoUploadFolder] = useState<string>('');
+  const [videoTitle, setVideoTitle] = useState<string>('');
+  const [videoUploading, setVideoUploading] = useState(false);
+  const [videoUploadProgress, setVideoUploadProgress] = useState<string | null>(null);
+  const [videoDeleting, setVideoDeleting] = useState<string | null>(null);
+  const [videosLoading, setVideosLoading] = useState(false);
+  const [videoThumbPreview, setVideoThumbPreview] = useState<string | null>(null);
+  const [pendingVideoFile, setPendingVideoFile] = useState<File | null>(null);
 
   const totalScans = bags.reduce((acc, curr) => acc + (curr.scan_count || 0), 0);
   const activeBags = bags.filter(b => b.bag_status === 'active').length;
@@ -296,21 +320,107 @@ export default function AdminDashboard() {
     }
   }, [isAuthenticated, activeTab]);
 
-  // ── Gallery tab: fetch images on tab activation ───────────────────────────
+  // ── Gallery tab: fetch images + videos on tab activation ─────────────────
   useEffect(() => {
     if (isAuthenticated && activeTab === 'gallery') {
       loadGalleryImages();
+      loadGalleryVideos();
     }
-  }, [isAuthenticated, activeTab, galleryActiveFolder]);
+  }, [isAuthenticated, activeTab]);
 
   const loadGalleryImages = async () => {
     setGalleryLoading(true);
-    const imgs = await imageService.getGalleryImages(galleryActiveFolder);
-    setGalleryImages(imgs);
-    const unique = [...new Set(imgs.map(i => i.folder))];
-    if (galleryActiveFolder === 'all') setGalleryFolders(unique);
-    setGalleryLoading(false);
+    try {
+      const [imgs, sFolders] = await Promise.all([
+        imageService.getGalleryImages('all'),
+        imageService.listGalleryFolders()
+      ]);
+      setGalleryImages(imgs);
+      const unique = [...new Set([...imgs.map(i => i.folder), ...sFolders])];
+      setGalleryFolders(unique);
+    } catch (e) {
+      console.error('Failed to load gallery images/folders', e);
+    } finally {
+      setGalleryLoading(false);
+    }
   };
+
+  const loadGalleryVideos = async () => {
+    setVideosLoading(true);
+    const vids = await videoService.getGalleryVideos('all');
+    setGalleryVideos(vids);
+    setVideosLoading(false);
+  };
+
+  // Map and parse the gallery images
+  const parsedGalleryImages = galleryImages.map(img => {
+    const { couple, folder } = parseCategory(img.folder);
+    return { ...img, cleanFolder: folder, couple };
+  });
+
+  // Filter gallery images by active filter couple
+  const filteredGalleryImages = parsedGalleryImages.filter(img => img.couple === galleryFilterCouple);
+
+  // Map and parse gallery videos (reels)
+  const parsedGalleryVideos = galleryVideos.map(vid => {
+    const { couple, folder } = parseCategory(vid.folder);
+    return { ...vid, cleanFolder: folder, couple };
+  });
+
+  // Filter gallery videos by active filter couple
+  const filteredGalleryVideos = parsedGalleryVideos.filter(vid => vid.couple === galleryFilterCouple);
+
+  // Filter gallery images and videos by active folder
+  const displayedGalleryImages = filteredGalleryImages.filter(img => 
+    galleryActiveFolder === 'all' || img.cleanFolder === galleryActiveFolder
+  );
+
+  const displayedGalleryVideos = filteredGalleryVideos.filter(vid => 
+    galleryActiveFolder === 'all' || vid.cleanFolder === galleryActiveFolder
+  );
+
+  // Parse all gallery folders (includes empty folders from storage)
+  const parsedGalleryFolders = galleryFolders.map(f => {
+    const { couple, folder } = parseCategory(f);
+    return { raw: f, couple, cleanFolder: folder };
+  });
+
+  // Get all unique clean folders for the selected couple (photos)
+  const activeFoldersForCouple = [...new Set([
+    ...parsedGalleryImages.filter(img => img.couple === galleryFilterCouple).map(img => img.cleanFolder),
+    ...parsedGalleryFolders.filter(f => f.couple === galleryFilterCouple).map(f => f.cleanFolder)
+  ])].filter(Boolean).sort();
+
+  // Get all unique clean folders for the selected couple (videos/reels)
+  const activeVideoFoldersForCouple = [...new Set([
+    ...parsedGalleryVideos.filter(vid => vid.couple === galleryFilterCouple).map(vid => vid.cleanFolder),
+    ...parsedGalleryFolders.filter(f => f.couple === galleryFilterCouple).map(f => f.cleanFolder)
+  ])].filter(Boolean).sort();
+
+  // Get all existing folders for the upload couple (photos)
+  const existingFoldersForUploadCouple = [...new Set([
+    ...parsedGalleryImages.filter(img => img.couple === galleryUploadCouple).map(img => img.cleanFolder),
+    ...parsedGalleryFolders.filter(f => f.couple === galleryUploadCouple).map(f => f.cleanFolder)
+  ])].filter(Boolean).sort();
+
+  // Get all existing video folders for the upload couple
+  const existingVideoFoldersForUploadCouple = [...new Set([
+    ...parsedGalleryImages.filter(img => img.couple === galleryUploadCouple).map(img => img.cleanFolder),
+    ...parsedGalleryVideos.filter(vid => vid.couple === galleryUploadCouple).map(vid => vid.cleanFolder),
+    ...parsedGalleryFolders.filter(f => f.couple === galleryUploadCouple).map(f => f.cleanFolder)
+  ])].filter(Boolean).sort();
+
+  // Reset folder selection if active couple folder disappears
+  useEffect(() => {
+    if (galleryActiveFolder !== 'all' && !activeFoldersForCouple.includes(galleryActiveFolder)) {
+      setGalleryActiveFolder('all');
+    }
+  }, [galleryFilterCouple, activeFoldersForCouple]);
+
+  // Reset active folder when sub-tab changes
+  useEffect(() => {
+    setGalleryActiveFolder('all');
+  }, [gallerySubTab]);
 
   const handleGalleryUpload = async (e: import('react').ChangeEvent<HTMLInputElement>) => {
     const fileList = e.currentTarget.files;
@@ -323,30 +433,77 @@ export default function AdminDashboard() {
     e.currentTarget.value = '';
   };
 
+  const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!videoUploadFolder) {
+      alert('Please select a folder to upload video.');
+      return;
+    }
+    setVideoUploading(true);
+    setVideoUploadProgress('Uploading video and generating thumbnail...');
+    try {
+      const result = await videoService.uploadGalleryVideo(file, videoUploadFolder, videoTitle || undefined);
+      if (result) {
+        setVideoTitle('');
+        setVideoUploadFolder('');
+        await loadGalleryVideos();
+      } else {
+        alert('Failed to upload video. Ensure size is under 50MB and storage is accessible.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || 'Error uploading video');
+    } finally {
+      setVideoUploading(false);
+      setVideoUploadProgress(null);
+      e.target.value = '';
+    }
+  };
+
   const handleDeleteGalleryImage = async (path: string, id?: string) => {
     if (!window.confirm('Delete this photo? This cannot be undone.')) return;
     await imageService.deleteGalleryImage(path, id);
     setGalleryImages(prev => prev.filter(i => i.path !== path));
   };
 
-  const handleDeleteGalleryFolder = async (folderName: string) => {
-    if (!window.confirm(`Delete the entire "${folderName}" folder and ALL its photos? This cannot be undone.`)) return;
-    setDeletingFolder(folderName);
-    await imageService.deleteGalleryFolder(folderName);
-    setGalleryFolders(prev => prev.filter(f => f !== folderName));
-    setGalleryImages(prev => prev.filter(i => i.folder !== folderName));
-    if (galleryActiveFolder === folderName) setGalleryActiveFolder('all');
+  const handleDeleteGalleryVideo = async (path: string, id?: string) => {
+    if (!window.confirm('Delete this video reel? This cannot be undone.')) return;
+    setVideoDeleting(id || path);
+    const success = await videoService.deleteGalleryVideo(path, id);
+    if (success) {
+      setGalleryVideos(prev => prev.filter(v => v.id !== id && v.path !== path));
+    } else {
+      alert('Failed to delete video.');
+    }
+    setVideoDeleting(null);
+  };
+
+  const handleDeleteGalleryFolder = async (cleanFolderName: string) => {
+    const rawCategory = formatCategory(galleryFilterCouple, cleanFolderName);
+    if (!window.confirm(`Delete the entire "${getCoupleDisplay(galleryFilterCouple)} · ${cleanFolderName}" folder and ALL its photos? This cannot be undone.`)) return;
+    setDeletingFolder(cleanFolderName);
+    await imageService.deleteGalleryFolder(rawCategory);
+    setGalleryFolders(prev => prev.filter(f => f !== rawCategory));
+    setGalleryImages(prev => prev.filter(i => i.folder !== rawCategory));
+    if (galleryActiveFolder === cleanFolderName) setGalleryActiveFolder('all');
     setDeletingFolder(null);
   };
 
   const handleCreateFolder = async () => {
     const name = newFolderName.trim().toLowerCase().replace(/\s+/g, '-');
     if (!name) return;
+    const rawCategory = formatCategory(galleryUploadCouple, name);
     setCreatingFolder(true);
-    const ok = await imageService.createGalleryFolder(name);
+    const ok = await imageService.createGalleryFolder(rawCategory);
     if (ok) {
-      setGalleryFolders(prev => [...new Set([...prev, name])]);
-      setGalleryUploadFolder(name);
+      setGalleryFolders(prev => [...new Set([...prev, rawCategory])]);
+      if (gallerySubTab === 'photos') {
+        setGalleryUploadFolder(rawCategory);
+      } else {
+        setVideoUploadFolder(rawCategory);
+      }
+      await loadGalleryImages();
       setNewFolderName('');
       setShowCreateFolder(false);
     }
@@ -354,8 +511,6 @@ export default function AdminDashboard() {
   };
 
   const fetchBags = async () => {
-    setLoadingBags(true);
-    setDbError(null);
     try {
       const data = await bagService.getAllBags();
       setBags(data);
@@ -1082,24 +1237,99 @@ export default function AdminDashboard() {
 
         {activeTab === 'gallery' && (
           <div className="space-y-6">
-            {/* Toolbar */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <div className="flex flex-col md:flex-row md:items-end gap-4">
-                {/* Folder selector */}
-                <div className="flex-1 space-y-2">
+            {/* Main Couple tabs */}
+            <div className="flex border-b border-gray-100 pb-px mb-2 overflow-x-auto gap-4 scrollbar-none">
+              {(['sandeep_asha', 'anand_sushila', 'both'] as GalleryCouple[]).map((c) => (
+                <button
+                  key={c}
+                  onClick={() => {
+                    setGalleryFilterCouple(c);
+                    setGalleryActiveFolder('all');
+                  }}
+                  className={`px-6 py-3 font-bold text-sm border-b-2 transition-all whitespace-nowrap ${
+                    galleryFilterCouple === c
+                      ? 'border-maroon-deep text-maroon-deep'
+                      : 'border-transparent text-gray-400 hover:text-gray-600'
+                  }`}
+                >
+                  {getCoupleDisplay(c)}
+                </button>
+              ))}
+            </div>
+
+            {/* Sub-tabs bar: Photos vs. Reels */}
+            <div className="flex gap-2 p-1 bg-gray-100/80 rounded-xl max-w-xs">
+              <button
+                onClick={() => setGallerySubTab('photos')}
+                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+                  gallerySubTab === 'photos'
+                    ? 'bg-white text-gray-800 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                Photos
+              </button>
+              <button
+                onClick={() => setGallerySubTab('reels')}
+                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+                  gallerySubTab === 'reels'
+                    ? 'bg-white text-gray-800 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                Reels / Videos
+              </button>
+            </div>
+
+            {/* Upload Toolbar */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4">
+              <h3 className="font-bold text-sm text-gray-800 uppercase tracking-wider">
+                Upload New {gallerySubTab === 'photos' ? 'Photos' : 'Video Reel'}
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                {/* Target Couple Select */}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold uppercase text-gray-400 px-1">Target Couple</label>
+                  <select
+                    value={galleryUploadCouple}
+                    onChange={e => setGalleryUploadCouple(e.target.value as GalleryCouple)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-maroon-deep/20"
+                  >
+                    <option value="sandeep_asha">Sandeep & Asha</option>
+                    <option value="anand_sushila">Anand & Sushila</option>
+                    <option value="both">All photos (Both)</option>
+                  </select>
+                </div>
+
+                {/* Folder Selector / New folder creation */}
+                <div className="space-y-2">
                   <label className="text-[10px] font-bold uppercase text-gray-400 px-1">Upload to Folder</label>
                   <div className="flex gap-2">
                     <select
-                      value={galleryUploadFolder}
-                      onChange={e => setGalleryUploadFolder(e.target.value)}
-                      className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none"
+                      value={gallerySubTab === 'photos' ? galleryUploadFolder : videoUploadFolder}
+                      onChange={e => {
+                        if (gallerySubTab === 'photos') {
+                          setGalleryUploadFolder(e.target.value);
+                        } else {
+                          setVideoUploadFolder(e.target.value);
+                        }
+                      }}
+                      className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-maroon-deep/20"
                     >
                       <option value="">— select folder —</option>
-                      {galleryFolders.map(f => <option key={f} value={f}>{f}</option>)}
+                      {(gallerySubTab === 'photos' ? existingFoldersForUploadCouple : existingVideoFoldersForUploadCouple).map(cleanF => {
+                        const rawVal = formatCategory(galleryUploadCouple, cleanF);
+                        return (
+                          <option key={rawVal} value={rawVal}>
+                            {cleanF}
+                          </option>
+                        );
+                      })}
                     </select>
                     <button
                       onClick={() => setShowCreateFolder(v => !v)}
-                      className="px-4 py-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors text-gray-600 flex items-center gap-2 text-sm font-bold"
+                      className="px-4 py-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors text-gray-600 flex items-center gap-2 text-sm font-bold whitespace-nowrap"
                     >
                       <FolderPlus size={16} />
                       New Folder
@@ -1107,24 +1337,67 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                {/* Upload button */}
-                <label className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm cursor-pointer transition-all ${
-                  galleryUploadFolder
-                    ? 'bg-maroon-dark text-white hover:bg-maroon-deep shadow-lg'
-                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                }`}>
-                  <Upload size={16} />
-                  {galleryUploading ? 'Uploading...' : 'Upload Photos'}
-                  <input
-                    type="file"
-                    multiple
-                    accept="image/*"
-                    className="hidden"
-                    disabled={!galleryUploadFolder || galleryUploading}
-                    onChange={handleGalleryUpload}
-                  />
-                </label>
+                {/* Action block or Title input */}
+                {gallerySubTab === 'photos' ? (
+                  <div>
+                    <label className={`flex items-center justify-center gap-2 w-full px-6 py-3 rounded-xl font-bold text-sm cursor-pointer transition-all ${
+                      galleryUploadFolder && !galleryUploading
+                        ? 'bg-maroon-dark text-white hover:bg-maroon-deep shadow-lg'
+                        : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                    }`}>
+                      <Upload size={16} />
+                      {galleryUploading ? 'Uploading...' : 'Upload Photos'}
+                      <input
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        className="hidden"
+                        disabled={!galleryUploadFolder || galleryUploading}
+                        onChange={handleGalleryUpload}
+                      />
+                    </label>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase text-gray-400 px-1">Video Title (Optional)</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Groom Entry, Sangeet Dance"
+                      value={videoTitle}
+                      onChange={e => setVideoTitle(e.target.value)}
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-maroon-deep/20"
+                    />
+                  </div>
+                )}
               </div>
+
+              {/* Reels Upload row */}
+              {gallerySubTab === 'reels' && (
+                <div className="flex flex-col sm:flex-row gap-4 items-center justify-between border-t border-gray-100 pt-4">
+                  <div className="text-xs text-gray-500">
+                    {videoUploadProgress ? (
+                      <span className="text-maroon-deep font-semibold animate-pulse">{videoUploadProgress}</span>
+                    ) : (
+                      <span>Max video size: 50MB. Format: MP4, WebM.</span>
+                    )}
+                  </div>
+                  <label className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm cursor-pointer transition-all ${
+                    videoUploadFolder && !videoUploading
+                      ? 'bg-maroon-dark text-white hover:bg-maroon-deep shadow-lg'
+                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  }`}>
+                    <Upload size={16} />
+                    {videoUploading ? 'Uploading...' : 'Select & Upload Video'}
+                    <input
+                      type="file"
+                      accept="video/*"
+                      className="hidden"
+                      disabled={!videoUploadFolder || videoUploading}
+                      onChange={handleVideoUpload}
+                    />
+                  </label>
+                </div>
+              )}
 
               {/* Create Folder inline form */}
               {showCreateFolder && (
@@ -1148,8 +1421,8 @@ export default function AdminDashboard() {
               )}
             </div>
 
-            {/* Folder filter pills with delete */}
-            {galleryFolders.length > 0 && (
+            {/* Folder filter pills with delete for Photos */}
+            {gallerySubTab === 'photos' && activeFoldersForCouple.length > 0 && (
               <div className="flex gap-2 flex-wrap items-center">
                 {/* All pill */}
                 <button
@@ -1160,36 +1433,39 @@ export default function AdminDashboard() {
                       : 'bg-white text-gray-500 border border-gray-200 hover:border-gray-400'
                   }`}
                 >
-                  All ({galleryImages.length})
+                  All ({filteredGalleryImages.length})
                 </button>
 
                 {/* Per-folder pills */}
-                {galleryFolders.map(f => (
-                  <div key={f} className={`flex items-center rounded-full border text-xs font-bold uppercase tracking-widest transition-all overflow-hidden ${
-                    galleryActiveFolder === f
-                      ? 'bg-maroon-deep text-white border-maroon-deep shadow'
-                      : 'bg-white text-gray-500 border-gray-200'
-                  }`}>
-                    <button
-                      onClick={() => setGalleryActiveFolder(f)}
-                      className="px-4 py-2"
-                    >
-                      {deletingFolder === f ? '…' : f}
-                    </button>
-                    <button
-                      onClick={() => handleDeleteGalleryFolder(f)}
-                      disabled={deletingFolder === f}
-                      className={`pr-3 pl-1 py-2 transition-colors ${
-                        galleryActiveFolder === f
-                          ? 'text-white/70 hover:text-white'
-                          : 'text-red-400 hover:text-red-600'
-                      } disabled:opacity-40`}
-                      title={`Delete "${f}" folder`}
-                    >
-                      <Trash2 size={11} />
-                    </button>
-                  </div>
-                ))}
+                {activeFoldersForCouple.map(f => {
+                  const imageCount = filteredGalleryImages.filter(img => img.cleanFolder === f).length;
+                  return (
+                    <div key={f} className={`flex items-center rounded-full border text-xs font-bold uppercase tracking-widest transition-all overflow-hidden ${
+                      galleryActiveFolder === f
+                        ? 'bg-maroon-deep text-white border-maroon-deep shadow'
+                        : 'bg-white text-gray-500 border-gray-200'
+                    }`}>
+                      <button
+                        onClick={() => setGalleryActiveFolder(f)}
+                        className="px-4 py-2"
+                      >
+                        {deletingFolder === f ? '…' : `${f} (${imageCount})`}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteGalleryFolder(f)}
+                        disabled={deletingFolder === f}
+                        className={`pr-3 pl-1 py-2 transition-colors ${
+                          galleryActiveFolder === f
+                            ? 'text-white/70 hover:text-white'
+                            : 'text-red-400 hover:text-red-600'
+                        } disabled:opacity-40`}
+                        title={`Delete "${f}" folder`}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  );
+                })}
 
                 <button
                   onClick={loadGalleryImages}
@@ -1200,38 +1476,145 @@ export default function AdminDashboard() {
               </div>
             )}
 
-            {/* Gallery Grid */}
-            {galleryLoading ? (
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                {[...Array(10)].map((_, i) => (
-                  <div key={i} className="aspect-square rounded-2xl bg-gray-200 animate-pulse" />
-                ))}
-              </div>
-            ) : galleryImages.length === 0 ? (
-              <div className="bg-white rounded-2xl border border-dashed border-gray-300 flex flex-col items-center justify-center py-24 text-gray-400">
-                <ImageIcon size={48} className="mb-4 opacity-30" />
-                <p className="font-bold text-sm">No photos yet</p>
-                <p className="text-xs mt-1">Create a folder above, then upload photos</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                {galleryImages.map(img => (
-                  <div key={img.path} className="relative group bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100">
-                    <div className="aspect-square">
-                      <img src={img.url} alt={img.name} className="w-full h-full object-cover" />
+            {/* Folder filter pills with delete for Reels */}
+            {gallerySubTab === 'reels' && activeVideoFoldersForCouple.length > 0 && (
+              <div className="flex gap-2 flex-wrap items-center">
+                {/* All pill */}
+                <button
+                  onClick={() => setGalleryActiveFolder('all')}
+                  className={`px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all ${
+                    galleryActiveFolder === 'all'
+                      ? 'bg-maroon-deep text-white shadow'
+                      : 'bg-white text-gray-500 border border-gray-200 hover:border-gray-400'
+                  }`}
+                >
+                  All ({filteredGalleryVideos.length})
+                </button>
+
+                {/* Per-folder pills */}
+                {activeVideoFoldersForCouple.map(f => {
+                  const videoCount = filteredGalleryVideos.filter(v => v.cleanFolder === f).length;
+                  return (
+                    <div key={f} className={`flex items-center rounded-full border text-xs font-bold uppercase tracking-widest transition-all overflow-hidden ${
+                      galleryActiveFolder === f
+                        ? 'bg-maroon-deep text-white border-maroon-deep shadow'
+                        : 'bg-white text-gray-500 border-gray-200'
+                    }`}>
+                      <button
+                        onClick={() => setGalleryActiveFolder(f)}
+                        className="px-4 py-2"
+                      >
+                        {deletingFolder === f ? '…' : `${f} (${videoCount})`}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteGalleryFolder(f)}
+                        disabled={deletingFolder === f}
+                        className={`pr-3 pl-1 py-2 transition-colors ${
+                          galleryActiveFolder === f
+                            ? 'text-white/70 hover:text-white'
+                            : 'text-red-400 hover:text-red-600'
+                        } disabled:opacity-40`}
+                        title={`Delete "${f}" folder`}
+                      >
+                        <Trash2 size={11} />
+                      </button>
                     </div>
-                    <div className="p-2">
-                      <p className="text-[10px] text-gray-400 uppercase tracking-widest truncate">{img.folder}</p>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteGalleryImage(img.path, img.id)}
-                      className="absolute top-2 right-2 w-8 h-8 bg-white/90 text-red-500 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 shadow"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
+
+                <button
+                  onClick={loadGalleryVideos}
+                  className="ml-auto px-4 py-2 rounded-full text-xs font-bold uppercase tracking-widest bg-white border border-gray-200 text-gray-400 hover:border-gray-400 transition-all flex items-center gap-1"
+                >
+                  <RotateCcw size={12} /> Refresh
+                </button>
               </div>
+            )}
+
+            {/* Photos Grid */}
+            {gallerySubTab === 'photos' && (
+              galleryLoading ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                  {[...Array(10)].map((_, i) => (
+                    <div key={i} className="aspect-square rounded-2xl bg-gray-200 animate-pulse" />
+                  ))}
+                </div>
+              ) : displayedGalleryImages.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-dashed border-gray-300 flex flex-col items-center justify-center py-24 text-gray-400">
+                  <ImageIcon size={48} className="mb-4 opacity-30" />
+                  <p className="font-bold text-sm">No photos yet</p>
+                  <p className="text-xs mt-1">Create a folder above, then upload photos</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                  {displayedGalleryImages.map(img => (
+                    <div key={img.path} className="relative group bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100">
+                      <div className="aspect-square">
+                        <img src={img.url} alt={img.name} className="w-full h-full object-cover" />
+                      </div>
+                      <div className="p-2">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-widest truncate">{img.cleanFolder}</p>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteGalleryImage(img.path, img.id)}
+                        className="absolute top-2 right-2 w-8 h-8 bg-white/90 text-red-500 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 shadow"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+
+            {/* Video Reels Grid */}
+            {gallerySubTab === 'reels' && (
+              videosLoading ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="aspect-[9/16] rounded-2xl bg-gray-200 animate-pulse" />
+                  ))}
+                </div>
+              ) : displayedGalleryVideos.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-dashed border-gray-300 flex flex-col items-center justify-center py-24 text-gray-400">
+                  <Film size={48} className="mb-4 opacity-30" />
+                  <p className="font-bold text-sm">No video reels yet</p>
+                  <p className="text-xs mt-1">Select a folder, enter an optional title, and upload a video</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                  {displayedGalleryVideos.map(vid => (
+                    <div key={vid.path} className="relative group bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100 flex flex-col">
+                      <a href={vid.url} target="_blank" rel="noopener noreferrer" className="aspect-[9/16] relative bg-black flex items-center justify-center overflow-hidden block">
+                        {vid.thumbnailUrl ? (
+                          <img src={vid.thumbnailUrl} alt={vid.title || vid.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="text-gray-500 flex flex-col items-center">
+                            <Film size={32} className="opacity-40" />
+                            <span className="text-[10px] mt-1">No Thumb</span>
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                          <Play size={28} className="text-white drop-shadow-md group-hover:scale-110 transition-transform" />
+                        </div>
+                      </a>
+                      <div className="p-3 flex-1 flex flex-col justify-between">
+                        <div>
+                          <p className="text-[10px] text-gray-400 uppercase tracking-widest truncate">{vid.cleanFolder}</p>
+                          <h4 className="font-bold text-xs text-gray-800 line-clamp-2 mt-1">{vid.title || vid.name}</h4>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteGalleryVideo(vid.path, vid.id)}
+                        disabled={videoDeleting === vid.id || videoDeleting === vid.path}
+                        className="absolute top-2 right-2 w-8 h-8 bg-white/90 text-red-500 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 shadow disabled:opacity-50"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )
             )}
           </div>
         )}

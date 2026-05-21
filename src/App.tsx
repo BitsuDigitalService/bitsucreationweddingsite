@@ -9,6 +9,7 @@ import { Analytics } from '@vercel/analytics/react';
 import Navbar from './components/Navbar';
 import Home from './pages/Home';
 import { AppProvider } from './context/AppContext';
+import MobileBottomNav from './components/MobileBottomNav';
 import { QrCode } from 'lucide-react';
 import NotFoundPage from './pages/NotFoundPage';
 import { useAdminStatus } from './hooks/useAdminStatus';
@@ -96,6 +97,7 @@ export default function App() {
         <Suspense fallback={null}>
           <QuickUpload />
         </Suspense>
+        <MobileBottomNav />
         <Analytics />
       </Router>
     </AppProvider>

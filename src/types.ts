@@ -13,8 +13,8 @@ export interface Couple {
   name2: string;
   story: string;
   imageUrl: string;
-  family1: FamilyDetails;
-  family2: FamilyDetails;
+  family1?: FamilyDetails;
+  family2?: FamilyDetails;
 }
 
 export interface EventDetail {

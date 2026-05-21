@@ -1,31 +1,89 @@
 import { motion, AnimatePresence } from 'motion/react';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
-import { Camera, ArrowLeft, X, ChevronLeft, ChevronRight, ImageOff, Trash2 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { ArrowLeft, X, ChevronLeft, ChevronRight, ImageOff, Trash2, Film, Users, Star } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useEffect, useState, type MouseEvent } from 'react';
 import { imageService, type GalleryImage } from '../services/imageService';
 import { useLiveGallery } from '../hooks/useLiveGallery';
 import { useAdminStatus } from '../hooks/useAdminStatus';
+import { useLiveReels } from '../hooks/useLiveReels';
+import ReelsPlayer from '../components/ReelsPlayer';
+import { parseCategory, getCoupleDisplay, type GalleryCouple } from '../lib/galleryHelper';
 
 export default function GalleryPage() {
   const { images: allImages, loading } = useLiveGallery('all');
+  const { videos, loading: videosLoading, reload: reloadVideos } = useLiveReels('all');
   const [activeFolder, setActiveFolder] = useState<string>('all');
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const isAdmin = useAdminStatus();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  const isReelsMode = activeFolder === '__reels__';
+
+  const [searchParams] = useSearchParams();
+  const initialCouple = searchParams.get('couple') as GalleryCouple;
+  const [activeCouple, setActiveCouple] = useState<GalleryCouple>(
+    initialCouple === 'sandeep_asha' || initialCouple === 'anand_sushila' || initialCouple === 'both'
+      ? initialCouple
+      : 'both'
+  );
+
+  const [showCoupleDropdown, setShowCoupleDropdown] = useState(false);
+  const [favorites, setFavorites] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('gallery_favorites');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const toggleFavorite = (path: string, e: MouseEvent) => {
+    e.stopPropagation();
+    setFavorites((prev) => {
+      const next = prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path];
+      localStorage.setItem('gallery_favorites', JSON.stringify(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
 
-  const folders = [...new Set(allImages.map((image) => image.folder))].filter(Boolean).sort();
+  // Map and filter images by active couple
+  const coupleImages = allImages
+    .map(img => {
+      const { couple, folder } = parseCategory(img.folder);
+      return { ...img, folder, couple }; // Set folder to the clean name for display
+    })
+    .filter(img => activeCouple === 'both' || img.couple === activeCouple);
 
-  const images = activeFolder === 'all' ? allImages : allImages.filter((image) => image.folder === activeFolder);
+  // Map and filter videos by active couple
+  const coupleVideos = videos
+    .map(vid => {
+      const { couple, folder } = parseCategory(vid.folder);
+      return { ...vid, folder, couple };
+    })
+    .filter(vid => activeCouple === 'both' || vid.couple === activeCouple);
 
+  const folders = [...new Set(coupleImages.map((image) => image.folder))].filter(Boolean).sort();
+
+  const images = activeFolder === 'all' 
+    ? coupleImages 
+    : coupleImages.filter((image) => image.folder === activeFolder);
+
+  // Reset folder filter when changing couple (unless in reels mode)
   useEffect(() => {
-    if (activeFolder !== 'all' && !folders.includes(activeFolder)) {
+    if (activeFolder !== '__reels__') {
+      setActiveFolder('all');
+    }
+  }, [activeCouple]);
+
+  // Adjust folder view if folder disappears for new couple selection
+  useEffect(() => {
+    if (activeFolder !== 'all' && activeFolder !== '__reels__' && !folders.includes(activeFolder)) {
       setActiveFolder('all');
     }
   }, [activeFolder, folders]);
@@ -71,113 +129,154 @@ export default function GalleryPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f5f0e8]">
+    <div className="min-h-screen bg-[#f5f0e8] text-gray-800">
       <Navbar />
 
-      <section className="relative overflow-hidden bg-maroon-dark pt-40 pb-20">
-        <div className="absolute inset-0 mandala-pattern opacity-10"></div>
-        <div className="relative z-10 mx-auto max-w-7xl px-6 text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-6 flex items-center justify-center gap-4"
-          >
-            <div className="h-[1px] w-12 bg-gold-metallic"></div>
-            <Camera size={24} className="text-gold-metallic" />
-            <div className="h-[1px] w-12 bg-gold-metallic"></div>
-          </motion.div>
-          <motion.h1
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 1 }}
-            className="mb-6 font-display text-6xl text-gold-metallic md:text-8xl"
-          >
-            The Gallery of Love
-          </motion.h1>
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.5 }}
-            className="mx-auto max-w-2xl font-garamond text-xl italic text-gold-light/60 md:text-2xl"
-          >
-            A flowing wall of moments, designed to feel natural on mobile and dense on desktop.
-          </motion.p>
-        </div>
-      </section>
+      {/* Main page wrapper (no card container, content flows directly on page) */}
+      <div className="mx-auto max-w-7xl px-3 pt-24 pb-16 sm:px-6 sm:pt-32 md:pt-36 space-y-6 sm:space-y-8">
+        
+        {/* Header Row */}
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-4 border-b border-gray-200">
+          <div>
+            <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-maroon-deep leading-tight font-bold">
+              Gallery of Love
+            </h1>
+            <p className="text-gray-400 font-sans mt-1 sm:mt-2 text-xs sm:text-sm md:text-base">
+              Cherish our beautiful memories
+            </p>
+          </div>
 
-      {!loading && folders.length > 0 && (
-        <div className="sticky top-0 z-20 border-b border-maroon-deep/10 bg-white shadow-sm">
-          <div className="mx-auto flex max-w-7xl items-center gap-2 overflow-x-auto px-3 py-3 sm:gap-3 sm:px-6 sm:py-4" style={{ scrollbarWidth: 'none' }}>
-            {['all', ...folders].map((folder) => (
+          {/* Couple Switcher Tabs */}
+          <div className="flex flex-wrap gap-2">
+            {(['both', 'sandeep_asha', 'anand_sushila'] as GalleryCouple[]).map((couple) => (
               <button
-                key={folder}
-                onClick={() => setActiveFolder(folder)}
-                className={`flex-shrink-0 rounded-full px-4 py-2 text-[10px] font-bold uppercase tracking-[0.2em] transition-all duration-300 sm:px-5 sm:text-xs sm:tracking-widest ${
-                  activeFolder === folder
-                    ? 'bg-maroon-deep text-gold-metallic shadow-lg'
-                    : 'border border-maroon-deep/20 bg-[#f5f0e8] text-maroon-dark/60 hover:border-maroon-deep/50'
+                key={couple}
+                onClick={() => setActiveCouple(couple)}
+                className={`px-5 py-2.5 text-[10px] font-bold uppercase tracking-widest transition-all duration-300 cursor-pointer border rounded-full ${
+                  activeCouple === couple
+                    ? 'bg-maroon-deep text-white border-maroon-deep shadow-sm'
+                    : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
                 }`}
               >
-                {folder === 'all' ? `All Photos (${allImages.length})` : `${folder} (${allImages.filter((image) => image.folder === folder).length})`}
+                {getCoupleDisplay(couple)}
               </button>
             ))}
           </div>
         </div>
-      )}
 
-      <section className="mx-auto max-w-[1600px] px-2 py-6 sm:px-6 sm:py-10 md:py-14">
-        {loading ? (
-          <div className="columns-2 gap-2 space-y-2 sm:gap-4 sm:space-y-4 md:columns-3 lg:columns-4 xl:columns-5">
-            {[...Array(15)].map((_, i) => (
-              <div key={i} className="mb-2 break-inside-avoid overflow-hidden rounded-[1.1rem] bg-white shadow-sm sm:mb-4 sm:rounded-[2rem]">
-                <div className={`${i % 3 === 0 ? 'aspect-[3/5]' : i % 3 === 1 ? 'aspect-[4/5]' : 'aspect-square'} animate-pulse bg-gray-200`} />
-              </div>
-            ))}
-          </div>
-        ) : allImages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-32 text-maroon-dark/40">
-            <ImageOff size={80} className="mb-6 opacity-30" />
-            <p className="mb-2 font-garamond text-3xl italic">No photos here yet</p>
-            <p className="text-sm">Upload photos from the Admin Dashboard or use Quick Upload</p>
-          </div>
-        ) : (
-          <>
-            <div className="mb-5 flex items-center gap-3 sm:mb-8 sm:gap-4">
-              <div className="h-[1px] flex-1 bg-maroon-deep/20"></div>
-              <h2 className="px-1 font-display text-lg text-maroon-deep sm:px-2 sm:text-2xl md:text-4xl">
-                {activeFolder === 'all' ? `All Photos (${allImages.length})` : `${activeFolder} (${images.length})`}
-              </h2>
-              <div className="h-[1px] flex-1 bg-maroon-deep/20"></div>
-            </div>
-
-            <div className="columns-2 gap-2 space-y-2 sm:gap-4 sm:space-y-4 md:columns-3 lg:columns-4 xl:columns-5">
-              {images.map((img, idx) => (
-                <PinCard
-                  key={img.path}
-                  img={img}
-                  idx={idx}
-                  isAdmin={isAdmin}
-                  deleting={deleting}
-                  onOpen={() => openLightbox(idx)}
-                  onDelete={(e) => handleDeleteImage(img, e)}
-                />
+        {/* Folder switch pills */}
+        {(!loading || coupleVideos.length > 0) && (folders.length > 0 || coupleVideos.length > 0) && (
+          <div className="border-b border-gray-200 pb-5 sm:pb-6">
+            <div className="flex items-center gap-2 overflow-x-auto py-2" style={{ scrollbarWidth: 'none' }}>
+              {['all', ...folders].map((folder) => (
+                <button
+                  key={folder}
+                  onClick={() => setActiveFolder(folder)}
+                  className={`flex-shrink-0 border px-4 py-2 sm:px-5 sm:py-2.5 text-[9px] sm:text-[10px] font-bold uppercase tracking-widest transition-all duration-300 cursor-pointer rounded-full ${
+                    activeFolder === folder
+                      ? 'bg-maroon-deep border-maroon-deep text-white shadow-sm'
+                      : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-100'
+                  }`}
+                >
+                  {folder === 'all' 
+                    ? `All Photos (${coupleImages.length})` 
+                    : `${folder} (${coupleImages.filter((image) => image.folder === folder).length})`}
+                </button>
               ))}
+              {/* Reels tab */}
+              {(coupleVideos.length > 0 || videosLoading) && (
+                <button
+                  onClick={() => setActiveFolder('__reels__')}
+                  className={`flex-shrink-0 flex items-center gap-1.5 border px-4 py-2 sm:px-5 sm:py-2.5 text-[9px] sm:text-[10px] font-bold uppercase tracking-widest transition-all duration-300 cursor-pointer rounded-full ${
+                    isReelsMode
+                      ? 'bg-maroon-deep border-maroon-deep text-white shadow-sm'
+                      : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-100'
+                  }`}
+                >
+                  <Film size={12} />
+                  Reels {coupleVideos.length > 0 ? `(${coupleVideos.length})` : ''}
+                </button>
+              )}
             </div>
-          </>
+          </div>
         )}
 
-        <div className="mt-10 flex justify-center sm:mt-20">
+        {/* Gallery Content Section */}
+        <div className="pt-2">
+          {/* Reels Mode */}
+          {isReelsMode && (
+            <div className="py-2">
+              <div className="mb-6 flex items-center justify-between">
+                <h2 className="font-sans text-[10px] sm:text-xs font-bold uppercase tracking-wider text-gray-400">
+                  Reels ({getCoupleDisplay(activeCouple)})
+                </h2>
+              </div>
+              <ReelsPlayer
+                videos={coupleVideos}
+                isAdmin={isAdmin}
+                onVideoDeleted={() => reloadVideos()}
+              />
+            </div>
+          )}
+
+          {/* Photos Mode */}
+          {!isReelsMode && loading ? (
+            <div className="columns-2 gap-3 space-y-3 sm:gap-4 sm:space-y-4 md:columns-3 lg:columns-4 xl:columns-5">
+              {[...Array(15)].map((_, i) => (
+                <div key={i} className="mb-4 break-inside-avoid overflow-hidden rounded-2xl bg-white">
+                  <div className={`${i % 3 === 0 ? 'aspect-[3/5]' : i % 3 === 1 ? 'aspect-[4/5]' : 'aspect-square'} animate-pulse bg-gray-100 rounded-2xl`} />
+                </div>
+              ))}
+            </div>
+          ) : allImages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-32 text-maroon-dark/40">
+              <ImageOff size={60} className="mb-4 opacity-30 text-gray-400" />
+              <p className="mb-2 font-display text-2xl text-maroon-deep">No photos here yet</p>
+              <p className="text-xs text-gray-400 text-center">Upload photos from the Admin Dashboard or use Quick Upload</p>
+            </div>
+          ) : !isReelsMode ? (
+            <>
+              <div className="mb-6 flex items-center justify-between">
+                <h2 className="font-sans text-[10px] sm:text-xs font-bold uppercase tracking-wider text-gray-400">
+                  {activeFolder === 'all' 
+                    ? `All Photos (${coupleImages.length})` 
+                    : `${activeFolder} (${images.length})`}
+                </h2>
+              </div>
+
+              <div className="columns-2 gap-3 space-y-3 sm:gap-4 sm:space-y-4 md:columns-3 lg:columns-4 xl:columns-5">
+                {images.map((img, idx) => (
+                  <PinCard
+                    key={img.path}
+                    img={img}
+                    idx={idx}
+                    isAdmin={isAdmin}
+                    deleting={deleting}
+                    isFavorite={favorites.includes(img.path)}
+                    onToggleFavorite={toggleFavorite}
+                    onOpen={() => openLightbox(idx)}
+                    onDelete={(e) => handleDeleteImage(img, e)}
+                  />
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        {/* Navigation Back Button */}
+        <div className="mt-8 pt-4 flex justify-center border-t border-gray-200">
           <Link to="/">
             <motion.button
-              whileHover={{ x: -10 }}
-              className="group flex items-center gap-4 text-sm font-bold uppercase tracking-[0.3em] text-maroon-deep"
+              whileHover={{ x: -6 }}
+              className="group flex items-center gap-3 text-xs font-bold uppercase tracking-widest text-maroon-deep cursor-pointer"
             >
-              <ArrowLeft size={20} />
+              <ArrowLeft size={16} />
               Return to Home
             </motion.button>
           </Link>
         </div>
-      </section>
+
+      </div>
 
       <AnimatePresence>
         {lightboxIndex !== null && images[lightboxIndex] && (
@@ -188,7 +287,7 @@ export default function GalleryPage() {
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-4"
             onClick={closeLightbox}
           >
-            <button onClick={closeLightbox} className="absolute top-6 right-6 text-white/70 transition-colors hover:text-white">
+            <button onClick={closeLightbox} className="absolute top-6 right-6 text-white/70 transition-colors hover:text-white cursor-pointer">
               <X size={32} />
             </button>
             <div
@@ -198,20 +297,20 @@ export default function GalleryPage() {
               <button
                 onClick={() => updateZoom(-0.2)}
                 disabled={zoom <= 1}
-                className="rounded-full bg-white/10 px-3 py-1 text-sm font-bold transition hover:bg-white/20 disabled:opacity-40"
+                className="rounded-full bg-white/10 px-3 py-1 text-sm font-bold transition hover:bg-white/20 disabled:opacity-40 cursor-pointer"
               >
                 -
               </button>
               <button
                 onClick={() => setZoom(1)}
-                className="min-w-16 rounded-full bg-white/10 px-3 py-1 text-xs font-bold transition hover:bg-white/20"
+                className="min-w-16 rounded-full bg-white/10 px-3 py-1 text-xs font-bold transition hover:bg-white/20 cursor-pointer"
               >
                 {Math.round(zoom * 100)}%
               </button>
               <button
                 onClick={() => updateZoom(0.2)}
                 disabled={zoom >= 3}
-                className="rounded-full bg-white/10 px-3 py-1 text-sm font-bold transition hover:bg-white/20 disabled:opacity-40"
+                className="rounded-full bg-white/10 px-3 py-1 text-sm font-bold transition hover:bg-white/20 disabled:opacity-40 cursor-pointer"
               >
                 +
               </button>
@@ -222,7 +321,7 @@ export default function GalleryPage() {
                 prevImg();
               }}
               disabled={lightboxIndex === 0}
-              className="absolute left-4 text-white/60 transition-colors hover:text-white disabled:opacity-20 md:left-8"
+              className="absolute left-4 text-white/60 transition-colors hover:text-white disabled:opacity-20 md:left-8 cursor-pointer"
             >
               <ChevronLeft size={48} />
             </button>
@@ -231,7 +330,7 @@ export default function GalleryPage() {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0 }}
-              className="max-h-[85vh] max-w-[90vw] overflow-auto rounded-[2rem] bg-white shadow-2xl"
+              className="max-h-[85vh] max-w-[90vw] overflow-auto rounded-none bg-white shadow-2xl"
               onClick={(e) => e.stopPropagation()}
               onWheel={(e) => {
                 e.stopPropagation();
@@ -254,7 +353,7 @@ export default function GalleryPage() {
                 nextImg();
               }}
               disabled={lightboxIndex === images.length - 1}
-              className="absolute right-4 text-white/60 transition-colors hover:text-white disabled:opacity-20 md:right-8"
+              className="absolute right-4 text-white/60 transition-colors hover:text-white disabled:opacity-20 md:right-8 cursor-pointer"
             >
               <ChevronRight size={48} />
             </button>
@@ -271,43 +370,53 @@ export default function GalleryPage() {
 }
 
 type PinCardProps = {
-  key?: string;
   img: GalleryImage;
   idx: number;
   isAdmin: boolean;
   deleting: string | null;
+  isFavorite: boolean;
+  onToggleFavorite: (path: string, e: MouseEvent) => void;
   onOpen: () => void;
   onDelete: (e: MouseEvent) => void;
 };
 
-function PinCard({ img, idx, isAdmin, deleting, onOpen, onDelete }: PinCardProps) {
+function PinCard({ img, idx, isAdmin, deleting, isFavorite, onToggleFavorite, onOpen, onDelete }: PinCardProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true }}
       transition={{ delay: (idx % 5) * 0.05 }}
-      whileHover={{ y: -6 }}
+      className="group relative mb-3 break-inside-avoid cursor-pointer sm:mb-4"
       onClick={onOpen}
-      className="group relative mb-2 break-inside-avoid cursor-pointer sm:mb-4"
     >
-      <div className="overflow-hidden rounded-[1rem] bg-white shadow-[0_8px_24px_rgba(0,0,0,0.08)] transition-all duration-300 group-hover:shadow-[0_20px_55px_rgba(0,0,0,0.16)] sm:rounded-[1.75rem] sm:shadow-[0_12px_35px_rgba(0,0,0,0.10)]">
+      <div className="overflow-hidden rounded-2xl bg-white transition-all duration-300">
         <div className="relative overflow-hidden">
           <img
             src={img.url}
             alt={img.name}
-            className="block h-auto w-full transition-transform duration-700 group-hover:scale-[1.03] select-none"
+            className="block h-auto w-full rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.05)] transition-all duration-700 group-hover:scale-[1.02] group-hover:shadow-[0_20px_50px_rgba(74,4,4,0.12)] select-none"
             loading="lazy"
             onContextMenu={(e) => e.preventDefault()}
             draggable={false}
           />
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/50 via-black/10 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
-          <div className="absolute top-2 left-2 rounded-full bg-white/90 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.18em] text-maroon-deep shadow-sm backdrop-blur-sm sm:top-4 sm:left-4 sm:px-3 sm:text-[10px] sm:tracking-widest">
-            {img.folder}
-          </div>
         </div>
-        <div className="px-2.5 py-2 sm:px-4 sm:py-3">
-          <p className="text-[10px] capitalize text-maroon-dark/50 sm:text-xs">{img.folder}</p>
+        
+        {/* Bottom Details Row */}
+        <div className="flex items-center justify-between mt-2.5 px-2">
+          <span className="text-[10px] sm:text-xs font-bold text-gray-500 font-sans tracking-wide capitalize truncate max-w-[80%]">
+            {img.folder}
+          </span>
+          <button
+            onClick={(e) => onToggleFavorite(img.path, e)}
+            className="text-gray-400 hover:text-gold-metallic p-1 transition-colors flex items-center justify-center cursor-pointer"
+            title={isFavorite ? "Remove from Favorites" : "Add to Favorites"}
+          >
+            <Star
+              size={14}
+              className={isFavorite ? "fill-gold-metallic text-gold-metallic" : "text-gray-300"}
+            />
+          </button>
         </div>
       </div>
 
@@ -315,7 +424,7 @@ function PinCard({ img, idx, isAdmin, deleting, onOpen, onDelete }: PinCardProps
         <button
           onClick={onDelete}
           disabled={deleting === img.path}
-          className="absolute top-2 right-2 z-20 flex h-8 w-8 items-center justify-center rounded-full bg-white text-red-500 opacity-100 shadow-md transition-all hover:bg-red-50 sm:top-4 sm:right-4 sm:h-9 sm:w-9 sm:opacity-0 sm:group-hover:opacity-100"
+          className="absolute top-3 right-3 z-20 flex h-8 w-8 items-center justify-center rounded-full border border-gray-100 bg-white text-red-500 shadow-md transition-all hover:bg-red-50 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
         >
           {deleting === img.path ? (
             <div className="h-3 w-3 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />

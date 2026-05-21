@@ -16,10 +16,12 @@ export default function LoveStory() {
           <div className="flex flex-col items-center">
             <StoryPhoto couple={state.couples.couple1} reverse={false} fallbackImage={COUPLE_1.imageUrl} />
 
-            <div className="w-full grid grid-cols-2 gap-4 mt-8">
-               <FamilyInfo title={state.couples.couple1.name1} family={state.couples.couple1.family1} />
-               <FamilyInfo title={state.couples.couple1.name2} family={state.couples.couple1.family2} />
-            </div>
+            {(state.couples.couple1.family1 || state.couples.couple1.family2) && (
+              <div className="w-full grid grid-cols-2 gap-4 mt-8">
+                 <FamilyInfo title={state.couples.couple1.name1} family={state.couples.couple1.family1} />
+                 <FamilyInfo title={state.couples.couple1.name2} family={state.couples.couple1.family2} />
+              </div>
+            )}
           </div>
 
           {/* Center Royal Monogram */}
@@ -93,10 +95,12 @@ export default function LoveStory() {
           <div className="flex flex-col items-center">
             <StoryPhoto couple={state.couples.couple2} reverse={true} fallbackImage={COUPLE_2.imageUrl} />
 
-            <div className="w-full grid grid-cols-2 gap-4 mt-8">
-               <FamilyInfo title={state.couples.couple2.name1} family={state.couples.couple2.family1} />
-               <FamilyInfo title={state.couples.couple2.name2} family={state.couples.couple2.family2} />
-            </div>
+            {(state.couples.couple2.family1 || state.couples.couple2.family2) && (
+              <div className="w-full grid grid-cols-2 gap-4 mt-8">
+                 <FamilyInfo title={state.couples.couple2.name1} family={state.couples.couple2.family1} />
+                 <FamilyInfo title={state.couples.couple2.name2} family={state.couples.couple2.family2} />
+              </div>
+            )}
           </div>
         </div>
       </div>

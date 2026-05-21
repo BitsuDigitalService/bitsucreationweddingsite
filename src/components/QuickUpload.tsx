@@ -4,6 +4,7 @@ import { Camera, FolderPlus, Upload, X, Check, ChevronDown, Loader2 } from 'luci
 import { imageService } from '../services/imageService';
 import { useLocation } from 'react-router-dom';
 import { useAdminStatus } from '../hooks/useAdminStatus';
+import { parseCategory, formatCategory, type GalleryCouple } from '../lib/galleryHelper';
 
 export default function QuickUpload() {
   const isAdmin = useAdminStatus();
@@ -21,10 +22,48 @@ export default function QuickUpload() {
   const fileRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
 
+  const [uploadCouple, setUploadCouple] = useState<GalleryCouple>('sandeep_asha');
+
   // Load folders from Supabase when panel opens
   useEffect(() => {
     if (isOpen) loadFolders();
   }, [isOpen]);
+
+  // Listen to custom window events to control the panel
+  useEffect(() => {
+    const handleToggle = () => setIsOpen(prev => !prev);
+    const handleOpen = () => setIsOpen(true);
+    const handleClose = () => setIsOpen(false);
+
+    window.addEventListener('toggle-quick-upload', handleToggle);
+    window.addEventListener('open-quick-upload', handleOpen);
+    window.addEventListener('close-quick-upload', handleClose);
+
+    return () => {
+      window.removeEventListener('toggle-quick-upload', handleToggle);
+      window.removeEventListener('open-quick-upload', handleOpen);
+      window.removeEventListener('close-quick-upload', handleClose);
+    };
+  }, []);
+
+  // Group and parse folders
+  const parsedFolders = folders.map(f => {
+    const { couple, folder } = parseCategory(f);
+    return { raw: f, couple, clean: folder };
+  });
+
+  // Filter folders for the selected uploadCouple
+  const foldersForCouple = parsedFolders.filter(f => f.couple === uploadCouple);
+
+  // Reset selected folder if active couple folder disappears or changes
+  useEffect(() => {
+    const match = foldersForCouple.find(f => f.raw === selectedFolder);
+    if (!match && foldersForCouple.length > 0) {
+      setSelectedFolder(foldersForCouple[0].raw);
+    } else if (foldersForCouple.length === 0) {
+      setSelectedFolder('');
+    }
+  }, [uploadCouple, folders]);
 
   const loadFolders = async () => {
     setLoadingFolders(true);
@@ -55,10 +94,11 @@ export default function QuickUpload() {
     const name = newFolder.trim().toLowerCase().replace(/\s+/g, '-');
     if (!name) return;
     setCreatingFolder(true);
-    const ok = await imageService.createGalleryFolder(name);
+    const rawCategory = formatCategory(uploadCouple, name);
+    const ok = await imageService.createGalleryFolder(rawCategory);
     if (ok) {
-      setFolders(prev => [...new Set([...prev, name])].sort());
-      setSelectedFolder(name);
+      setFolders(prev => [...new Set([...prev, rawCategory])].sort());
+      setSelectedFolder(rawCategory);
       setNewFolder('');
       setShowNewFolder(false);
     }
@@ -85,7 +125,7 @@ export default function QuickUpload() {
   if (!isAdmin || location.pathname.startsWith('/admin')) return null;
 
   return (
-    <div className="fixed bottom-5 right-24 md:bottom-10 md:right-[7rem] z-[100] flex flex-col items-end gap-3">
+    <div className="fixed bottom-24 right-4 md:bottom-10 md:right-[7rem] z-[100] flex flex-col items-end gap-3">
       
       {/* Upload Panel */}
       <AnimatePresence>
@@ -95,7 +135,7 @@ export default function QuickUpload() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.95 }}
             transition={{ type: 'spring', stiffness: 320, damping: 26 }}
-            className="w-[min(18rem,calc(100vw-1.5rem))] origin-bottom-right rounded-3xl border border-gray-100 bg-white p-5 shadow-2xl"
+            className="w-[min(18rem,calc(100vw-1.5rem))] origin-bottom-right rounded-3xl border border-gray-100 bg-white p-5 shadow-2xl text-maroon-dark"
           >
             {/* Header */}
             <div className="flex items-center justify-between mb-4">
@@ -106,6 +146,23 @@ export default function QuickUpload() {
               <button onClick={() => setIsOpen(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
                 <X size={16} />
               </button>
+            </div>
+
+            {/* Target Couple selector */}
+            <div className="space-y-2 mb-3">
+              <label className="text-[10px] font-bold uppercase text-gray-400">Target Couple</label>
+              <div className="relative">
+                <select
+                  value={uploadCouple}
+                  onChange={e => setUploadCouple(e.target.value as GalleryCouple)}
+                  className="w-full bg-gray-50 border border-gray-200 text-maroon-dark rounded-xl px-4 py-2.5 text-sm outline-none appearance-none pr-8 focus:ring-2 focus:ring-maroon-deep/20"
+                >
+                  <option value="sandeep_asha" className="text-maroon-dark bg-white">Sandeep & Asha</option>
+                  <option value="anand_sushila" className="text-maroon-dark bg-white">Anand & Sushila</option>
+                  <option value="both" className="text-maroon-dark bg-white">All photos</option>
+                </select>
+                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              </div>
             </div>
 
             {/* Folder selector */}
@@ -122,10 +179,14 @@ export default function QuickUpload() {
                   <select
                     value={selectedFolder}
                     onChange={e => setSelectedFolder(e.target.value)}
-                    className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none appearance-none pr-8 focus:ring-2 focus:ring-maroon-deep/20"
+                    className="w-full bg-gray-50 border border-gray-200 text-maroon-dark rounded-xl px-4 py-2.5 text-sm outline-none appearance-none pr-8 focus:ring-2 focus:ring-maroon-deep/20"
                   >
-                    <option value="">— select folder —</option>
-                    {folders.map(f => <option key={f} value={f}>{f}</option>)}
+                    <option value="" className="text-maroon-dark bg-white">— select folder —</option>
+                    {foldersForCouple.map(f => (
+                      <option key={f.raw} value={f.raw} className="text-maroon-dark bg-white">
+                        {f.clean}
+                      </option>
+                    ))}
                   </select>
                   <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 </div>
@@ -164,7 +225,7 @@ export default function QuickUpload() {
                         onChange={e => setNewFolder(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && handleCreateFolder()}
                         placeholder="e.g. haldi, day-1"
-                        className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-maroon-deep/20"
+                        className="flex-1 bg-gray-50 border border-gray-200 text-maroon-dark rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-maroon-deep/20"
                         autoFocus
                       />
                       <button
@@ -215,19 +276,19 @@ export default function QuickUpload() {
 
             {selectedFolder && !uploading && !success && (
               <p className="text-center text-[10px] text-gray-400 mt-2">
-                → <span className="font-bold text-maroon-deep">{selectedFolder}</span>
+                → <span className="font-bold text-maroon-deep">{parseCategory(selectedFolder).folder}</span>
               </p>
             )}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* FAB */}
+      {/* FAB (Desktop Only) */}
       <motion.button
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.95 }}
         onClick={() => setIsOpen(v => !v)}
-        className="relative flex h-14 w-14 items-center justify-center rounded-full border-4 border-gold-metallic/30 bg-maroon-dark text-gold-metallic shadow-2xl shadow-maroon-dark/40"
+        className="relative h-14 w-14 items-center justify-center rounded-full border-4 border-gold-metallic/30 bg-maroon-dark text-gold-metallic shadow-2xl shadow-maroon-dark/40 hidden md:flex"
         title="Quick Upload"
       >
         <AnimatePresence mode="wait">
@@ -241,12 +302,7 @@ export default function QuickUpload() {
             </motion.span>
           )}
         </AnimatePresence>
-        {/* Admin badge */}
-        <span className="absolute -top-1 -left-1 w-5 h-5 bg-gold-metallic rounded-full text-maroon-dark text-[8px] font-black flex items-center justify-center shadow">A</span>
       </motion.button>
-      <span className="rounded-full bg-white/95 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-maroon-dark shadow md:hidden">
-        Upload
-      </span>
     </div>
   );
 }

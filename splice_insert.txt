@@ -1,0 +1,101 @@
+            </section>
+          )}
+        </div>
+
+        {/* Bottom Action Bar */}
+        <div className="p-4 border-t border-gray-50 space-y-2">
+           <button 
+            onClick={handleSaveTemplate}
+            disabled={isSaving}
+            className={`w-full py-3 rounded-xl font-bold text-[10px] flex items-center justify-center gap-2 transition-all shadow-sm ${saveSuccess ? 'bg-green-500 text-white' : 'bg-gold-metallic text-white hover:bg-gold-deep'}`}
+           >
+              {isSaving ? (
+                <RefreshCw size={16} className="animate-spin" />
+              ) : saveSuccess ? (
+                <Check size={16} />
+              ) : (
+                <Save size={16} />
+              )}
+              {saveSuccess ? 'Design Saved!' : 'Save as New Template'}
+           </button>
+
+           <button 
+            onClick={() => handlePrintA4(printLayout)}
+            disabled={isGeneratingPdf}
+            className="w-full bg-maroon-dark text-white py-3 rounded-xl font-bold text-[10px] flex items-center justify-center gap-2 hover:bg-maroon-deep transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+           >
+              {isGeneratingPdf ? (
+                <RefreshCw size={16} className="animate-spin" />
+              ) : (
+                <Download size={16} />
+              )}
+              {isGeneratingPdf
+                ? `Generating... (${totalTagsToPrint} tags)`
+                : `Export ${totalTagsToPrint} Tags PDF`}
+           </button>
+        </div>
+      </div>
+
+      {/* Main Canvas Area */}
+      <div className="flex-1 flex flex-col items-center overflow-auto bg-gray-50/50">
+         {viewMode === 'editor' ? (
+           <>
+              <div className="w-full px-6 py-2 flex items-center justify-between border-b border-gray-100 bg-white shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="px-3 py-1 bg-maroon-dark/5 rounded-md border border-maroon-dark/10">
+                       <span className="text-[10px] font-bold text-maroon-dark uppercase tracking-tight">Active Side: {activeSide.toUpperCase()}</span>
+                    </div>
+                    <span className="text-[9px] text-gray-400 font-medium">Click a card below to target design tools</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right hidden md:block">
+                      <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">Tag ID Sequence</p>
+                      <p className="text-[10px] font-mono text-gray-500 font-bold">{tagId}</p>
+                    </div>
+                    <div className="w-[1px] h-6 bg-gray-200"></div>
+                    <button onClick={regeneratePreview} className="flex items-center gap-2 px-3 py-1.5 bg-gold-metallic text-white rounded-lg text-[9px] font-bold uppercase transition-transform hover:scale-105">
+                       <Maximize2 size={12} />
+                       Preview Sheet
+                    </button>
+                  </div>
+              </div>
+
+              <div className="flex-1 flex flex-col xl:flex-row items-center justify-center w-full p-8 gap-12 min-h-0 overflow-auto">
+                  <div className="group relative flex flex-col items-center gap-4">
+                    <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Front Face</h4>
+                    <div 
+                      onClick={() => setActiveSide('front')}
+                      className={`relative bg-white transition-all cursor-pointer ${activeSide === 'front' ? 'shadow-[0_0_50px_rgba(88,0,0,0.15)] ring-4 ring-maroon-dark/10' : 'shadow-xl grayscale-[20%] opacity-60 hover:opacity-100 hover:grayscale-0'}`}
+                      style={{ width: TAG_WIDTH, height: TAG_HEIGHT }}
+                    >
+                      <canvas ref={frontCanvasRef} />
+                      <div className="absolute inset-4 border border-dashed border-maroon-dark/5 pointer-events-none z-30"></div>
+                      {isUploading.front && (
+                        <div className="absolute inset-0 z-40 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
+                           <RefreshCw className="text-maroon-dark animate-spin" size={32} />
+                           <span className="text-[10px] font-bold text-maroon-dark uppercase tracking-widest">Optimizing Design...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="group relative flex flex-col items-center gap-4">
+                    <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Back Face</h4>
+                    <div 
+                      onClick={() => setActiveSide('back')}
+                      className={`relative bg-white transition-all cursor-pointer ${activeSide === 'back' ? 'shadow-[0_0_50px_rgba(88,0,0,0.15)] ring-4 ring-maroon-dark/10' : 'shadow-xl grayscale-[20%] opacity-60 hover:opacity-100 hover:grayscale-0'}`}
+                      style={{ width: TAG_WIDTH, height: TAG_HEIGHT }}
+                    >
+                      <canvas ref={backCanvasRef} />
+                      <div className="absolute inset-4 border border-dashed border-maroon-dark/5 pointer-events-none z-30"></div>
+                      {isUploading.back && (
+                        <div className="absolute inset-0 z-40 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
+                           <RefreshCw className="text-maroon-dark animate-spin" size={32} />
+                           <span className="text-[10px] font-bold text-maroon-dark uppercase tracking-widest">Optimizing Design...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+              </div>
+           </>
+         ) : (

@@ -174,6 +174,11 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
     return (localStorage.getItem('kalyanam_print_layout') as any) || '8';
   });
 
+  const [totalTagsToPrint, setTotalTagsToPrint] = useState<number>(() => {
+    const saved = localStorage.getItem('kalyanam_total_tags');
+    return saved ? parseInt(saved) : 8;
+  });
+
   const [duplexMode, setDuplexMode] = useState<DuplexMode>(() => {
     return (localStorage.getItem('kalyanam_duplex_mode') as any) || 'long-edge';
   });
@@ -187,6 +192,10 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
   const [isUploading, setIsUploading] = useState<{ front: boolean, back: boolean }>({ front: false, back: false });
   const [qrBaseUrl, setQrBaseUrl] = useState(window.location.origin + '/bags/');
   const isMounted = useRef(true);
+  const currentLayoutSpec = getPrintLayoutSpec(printLayout);
+  const tagsPerSheet = currentLayoutSpec.count;
+  const sheetCount = Math.max(1, Math.ceil(totalTagsToPrint / tagsPerSheet));
+  const pdfPageCount = printLayout === '1' ? sheetCount : sheetCount * 2;
 
   // Persistence Syncing
   useEffect(() => {
@@ -210,10 +219,13 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
   }, [duplexMode]);
 
   useEffect(() => {
+    localStorage.setItem('kalyanam_total_tags', totalTagsToPrint.toString());
+  }, [totalTagsToPrint]);
+
+  useEffect(() => {
     localStorage.setItem('kalyanam_preview_zoom', previewZoom.toString());
   }, [previewZoom]);
 
-  // Canvas dimensions for the tag (scaled for screen, roughly 70x100mm ratio)
   const TAG_WIDTH = 350;
   const TAG_HEIGHT = 500;
 
@@ -240,13 +252,11 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
     if (isMounted.current) {
       setCustomTemplates(templates);
       
-      // Proactive background caching of high-quality images
       templates.forEach(async (tpl) => {
         try {
           const cacheKey = `tpl_img_${tpl.id}`;
           const cached = await localforage.getItem(cacheKey);
           if (!cached) {
-            // Pre-warm cache for faster subsequent loads
             const img = new Image();
             img.crossOrigin = 'anonymous';
             img.src = tpl.front_url;
@@ -268,7 +278,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
 
   const isLoadingTemplate = useRef(false);
 
-  // Keep QR code updated
   useEffect(() => {
     const updateQR = async (canvas: fabric.Canvas | null) => {
       if (!canvas) return;
@@ -289,7 +298,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
     updateQR(backCanvas);
   }, [qrBaseUrl, tagId, frontCanvas, backCanvas]);
 
-  // Initialize canvas
   useEffect(() => {
     if (!frontCanvasRef.current || !backCanvasRef.current) return;
 
@@ -444,13 +452,10 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
     };
   }, [activeTemplate]);
 
-
-
   const handleCustomUpload = async (e: React.ChangeEvent<HTMLInputElement>, side: 'front' | 'back') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Immediate local preview
     const localUrl = URL.createObjectURL(file);
     if (side === 'front') {
       setActiveTemplate(prev => ({ ...prev, id: 'custom', front: localUrl }));
@@ -497,21 +502,16 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
       const timestamp = new Date();
       const templateName = `Design ${timestamp.toLocaleDateString()} ${timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
       
-      // Generate High Quality Snapshots for the template preview
-      // We want to save what the user SEE'S as the template image
       const frontSnapshot = frontCanvas.toDataURL({ format: 'png', multiplier: 2 });
       const backSnapshot = backCanvas.toDataURL({ format: 'png', multiplier: 2 });
 
-      // 1. First save as a template (images)
-      // We use the snapshots as the URLs for the template preview so it's "what you see is what you get"
       const template = await bagService.saveTagTemplate({
         name: templateName,
-        front_url: frontSnapshot, // This might be large, but let's try
+        front_url: frontSnapshot,
         back_url: backSnapshot
       });
 
       if (template) {
-        // 2. Then save the specific layout (objects/configs)
         await bagService.saveTagLayout({
           template_id: template.id,
           name: templateName,
@@ -519,7 +519,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
           back_config: backCanvas.toObject(['id', '_element_type', 'selectable', 'evented'])
         });
 
-        // 3. Robust Cache storage for instant loading
         const cacheKey = `tpl_layout_${template.id}`;
         await localforage.setItem(cacheKey, {
           front: frontCanvas.toObject(['id', '_element_type', 'selectable', 'evented']),
@@ -548,17 +547,14 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
   const loadSavedTemplate = async (tpl: any) => {
     isLoadingTemplate.current = true;
     try {
-      // 1. Try to load from Local Cache First (Instant)
       const cacheKey = `tpl_layout_${tpl.id}`;
       let layoutData = await localforage.getItem<any>(cacheKey);
       
-      // 2. Fallback to server layout data if cache missed
       if (!layoutData && tpl.layout) {
         layoutData = {
           front: tpl.layout.front_config,
           back: tpl.layout.back_config
         };
-        // Populate cache for next time
         await localforage.setItem(cacheKey, layoutData);
       }
 
@@ -566,11 +562,9 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         localStorage.setItem('kalyanam_tag_project', JSON.stringify(layoutData));
       }
 
-      // Check if we have cached high-res images
       const cachedFront = await localforage.getItem<string>(`tpl_img_${tpl.id}_front`);
       const cachedBack = await localforage.getItem<string>(`tpl_img_${tpl.id}_back`);
 
-      // 3. Set the active template
       setActiveTemplate({ 
         id: tpl.id, 
         name: tpl.name, 
@@ -579,7 +573,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
       });
     } catch (e) {
       console.error('Failed to load saved template:', e);
-      // Fallback
       setActiveTemplate({ id: tpl.id, name: tpl.name, front: tpl.front_url, back: tpl.back_url });
     } finally {
       isLoadingTemplate.current = false;
@@ -587,7 +580,7 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
   };
 
   const handleDeleteTemplate = async (e: React.MouseEvent, tpl: any) => {
-    e.stopPropagation(); // Prevent triggering the select
+    e.stopPropagation();
     if (!window.confirm(`Are you sure you want to delete template "${tpl.name}"?`)) return;
 
     try {
@@ -596,7 +589,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         setCustomTemplates(prev => prev.filter(t => t.id !== tpl.id));
         setSuccessMessage('Template deleted successfully!');
         if (activeTemplate.id === tpl.id) {
-          // If deleted template was active, switch to default
           setActiveTemplate(DEFAULT_TEMPLATES[0]);
           loadSavedTemplate(DEFAULT_TEMPLATES[0]);
         }
@@ -675,7 +667,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
     return (
       <div className="relative group cursor-pointer" onClick={() => setViewMode('editor')}>
         <div className={`bg-white shadow-2xl overflow-hidden relative border border-gray-200 transition-all ${sheetClass}`}>
-           {/* A4 Info overlay */}
            <div className="absolute top-2 left-4 z-20">
               <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">
                 {side === 'overlay' ? 'ALIGNMENT OVERLAY (hold to light)' : `${side.toUpperCase()} SHEET`} - A4 {spec.isLandscape ? 'LANDSCAPE' : 'PORTRAIT'}
@@ -727,7 +718,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
              </div>
            )}
 
-           {/* Precision Cut Guides */}
            <div className="absolute inset-2 border border-dashed border-gray-100 pointer-events-none opacity-50"></div>
         </div>
         <div className="mt-4 flex justify-center">
@@ -780,6 +770,8 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
     setIsGeneratingPdf(true);
     try {
       const spec = getPrintLayoutSpec(layout);
+      const tagsPerSheet = spec.count;
+      const numSheets = Math.ceil(totalTagsToPrint / tagsPerSheet);
       const page = getA4PageSize(spec.isLandscape);
       const pdf = new jsPDF(spec.isLandscape ? 'l' : 'p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -787,26 +779,18 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
       
       if (!frontCanvas || !backCanvas) return;
 
-      const count = spec.count;
-
       const getSnapshot = async (canvas: fabric.Canvas, side: 'front' | 'back', index: number) => {
         const currentId = (tagNumber + index).toString();
-        
-        // Find and update QR/TagText
         const objects = canvas.getObjects();
-        
         const qrObj = objects.find(o => 
           (o as any).id === 'qr-code' || 
           ((o as any)._element_type === 'qr') ||
           (o.type === 'image' && (o as any).src?.includes('data:image/png'))
         ) as fabric.FabricImage;
-
-        // Find ALL text objects that contain [TAG_NUMBER] or have tag-id-label
         const dynamicTexts = objects.filter(o => 
            o.type === 'i-text' || o.type === 'text' || o.type === 'textbox'
         ) as fabric.IText[];
 
-        // Save original texts to restore later
         const originalTexts = new Map<fabric.IText, string>();
         
         dynamicTexts.forEach(textObj => {
@@ -836,7 +820,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
           }
         });
 
-        // Update QR
         if (qrObj) {
           const url = qrBaseUrl + currentId;
           const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 512 });
@@ -848,7 +831,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         canvas.renderAll();
         const data = canvas.toDataURL({ format: 'png', multiplier: 3 });
 
-        // Restore original state
         originalTexts.forEach((origText, textObj) => {
           textObj.set('text', origText);
         });
@@ -864,38 +846,41 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         return data;
       };
 
-      const drawPage = async (side: 'front' | 'back') => {
+      const drawPage = async (side: 'front' | 'back', sheetIndex: number) => {
         const canvas = side === 'front' ? frontCanvas : backCanvas;
+        const sheetStartTagIndex = sheetIndex * tagsPerSheet;
+        const tagsOnThisSheet = Math.min(tagsPerSheet, totalTagsToPrint - sheetStartTagIndex);
+
         pdf.setFontSize(7);
         pdf.setTextColor(180);
-        pdf.text(`${side.toUpperCase()} Side - A4 ${spec.isLandscape ? 'Landscape' : 'Portrait'} Layout - Flip: ${duplexMode}`, 5, 5);
+        pdf.text(
+          `${side.toUpperCase()} Side - Sheet ${sheetIndex + 1}/${numSheets} - A4 ${spec.isLandscape ? 'Landscape' : 'Portrait'} - ${tagsOnThisSheet} tags (Tags #${tagNumber + sheetStartTagIndex}–${tagNumber + sheetStartTagIndex + tagsOnThisSheet - 1})`,
+          5, 5
+        );
 
         const { startX, startY, totalGridW, totalGridH } = getPlacementStart(spec, pdfWidth, pdfHeight);
 
-        // Draw print safe bounds/crop marks if debug is enabled
         if (showPrintDebug) {
            pdf.setDrawColor(255, 0, 0);
            pdf.setLineWidth(0.1);
            pdf.rect(startX, startY, totalGridW, totalGridH);
-           
-           // Center crosshairs
            pdf.line(pdfWidth/2, startY - 5, pdfWidth/2, startY + totalGridH + 5);
            pdf.line(startX - 5, pdfHeight/2, startX + totalGridW + 5, pdfHeight/2);
         }
 
-        for(let i=0; i<count; i++) {
+        for (let i = 0; i < tagsOnThisSheet; i++) {
+          const globalTagIndex = sheetStartTagIndex + i;
           const placement = getPagePlacement(i, side, spec, duplexMode, page.width, page.height, backOffsetX, backOffsetY);
-          const imgData = await getSnapshot(canvas!, side, i);
+          const imgData = await getSnapshot(canvas!, side, globalTagIndex);
           pdf.addImage(imgData, 'PNG', placement.x, placement.y, spec.tagW, spec.tagH);
-          
-          // Cutting guides
+
           pdf.setDrawColor(200);
           pdf.setLineWidth(0.05);
-          pdf.line(placement.x - 2, placement.y, placement.x + spec.tagW + 2, placement.y); 
-          pdf.line(placement.x - 2, placement.y + spec.tagH, placement.x + spec.tagW + 2, placement.y + spec.tagH); 
-          pdf.line(placement.x, placement.y - 2, placement.x, placement.y + spec.tagH + 2); 
-          pdf.line(placement.x + spec.tagW, placement.y - 2, placement.x + spec.tagW, placement.y + spec.tagH + 2); 
-          
+          pdf.line(placement.x - 2, placement.y, placement.x + spec.tagW + 2, placement.y);
+          pdf.line(placement.x - 2, placement.y + spec.tagH, placement.x + spec.tagW + 2, placement.y + spec.tagH);
+          pdf.line(placement.x, placement.y - 2, placement.x, placement.y + spec.tagH + 2);
+          pdf.line(placement.x + spec.tagW, placement.y - 2, placement.x + spec.tagW, placement.y + spec.tagH + 2);
+
           if (showPrintDebug) {
              pdf.setDrawColor(0, 0, 255);
              pdf.rect(placement.x + 2, placement.y + 2, spec.tagW - 4, spec.tagH - 4);
@@ -903,13 +888,16 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         }
       };
 
-      await drawPage('front');
-      if (layout !== '1') {
-        pdf.addPage();
-        await drawPage('back');
+      for (let s = 0; s < numSheets; s++) {
+        if (s > 0) pdf.addPage();
+        await drawPage('front', s);
+        if (layout !== '1') {
+          pdf.addPage();
+          await drawPage('back', s);
+        }
       }
-      
-      pdf.save(`Wedding_Tags_${layout}_up_${tagId}.pdf`);
+
+      pdf.save(`Wedding_Tags_${layout}_up_Tags_${tagNumber}-${tagNumber + totalTagsToPrint - 1}.pdf`);
     } catch (err) {
       console.error('PDF generation failed:', err);
       setErrorMessage('Failed to generate PDF. Please try again.');
@@ -934,7 +922,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         )}
       </AnimatePresence>
 
-      {/* Templates Panel */}
       <div className="w-80 bg-white border-r border-gray-100 flex flex-col shadow-2xl z-10 shrink-0">
         <div className="p-4 border-b border-gray-50 bg-maroon-dark text-white">
           <div className="flex items-center gap-3 mb-1">
@@ -945,7 +932,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
-          {/* Mode Switcher */}
           <div className="bg-gray-100 p-1 rounded-xl flex">
              <button 
               onClick={() => setViewMode('editor')}
@@ -959,7 +945,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
 
           {viewMode === 'editor' ? (
             <>
-              {/* Custom Uploads */}
               <section className="space-y-3">
                  <div className="flex items-center gap-2 mb-1">
                     <Upload size={12} className="text-maroon-deep" />
@@ -995,7 +980,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                  </div>
               </section>
 
-              {/* Saved Templates */}
               {customTemplates.length > 0 && (
                 <section className="space-y-3">
                    <div className="flex items-center gap-2 mb-1">
@@ -1031,7 +1015,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                 </section>
               )}
 
-              {/* Design Controls */}
               <section className="space-y-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Type size={14} className="text-maroon-deep" />
@@ -1077,7 +1060,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                 </div>
               </section>
 
-              {/* Element properties */}
               {selectedObject && (
                 <motion.section 
                   initial={{ opacity: 0, x: -20 }}
@@ -1119,13 +1101,95 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
             </>
           ) : (
             <section className="space-y-6">
+               <div className="bg-maroon-dark/5 border border-maroon-dark/10 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                     <Printer size={13} className="text-maroon-deep" />
+                     <label className="text-[9px] font-bold uppercase tracking-widest text-maroon-dark">Total Tags to Print</label>
+                  </div>
+                  <div className="flex items-center gap-3">
+                     <button
+                       onClick={() => setTotalTagsToPrint(prev => Math.max(1, prev - getPrintLayoutSpec(printLayout).count))}
+                       className="w-8 h-8 rounded-lg bg-white border border-gray-200 text-maroon-dark font-bold text-sm hover:border-maroon-dark/50 transition-colors flex items-center justify-center"
+                     >−</button>
+                     <input
+                       type="number"
+                       min={1}
+                       max={9999}
+                       value={totalTagsToPrint}
+                       onChange={(e) => {
+                         const val = parseInt(e.target.value) || 1;
+                         setTotalTagsToPrint(Math.max(1, val));
+                       }}
+                       className="flex-1 text-center bg-white border border-gray-200 rounded-lg p-2 text-[13px] font-mono font-bold text-maroon-dark focus:ring-2 focus:ring-maroon-dark/20 outline-none"
+                     />
+                     <button
+                       onClick={() => setTotalTagsToPrint(prev => prev + tagsPerSheet)}
+                       className="w-8 h-8 rounded-lg bg-white border border-gray-200 text-maroon-dark font-bold text-sm hover:border-maroon-dark/50 transition-colors flex items-center justify-center"
+                     >+</button>
+                  </div>
+                  <div className="bg-white rounded-lg p-3 border border-gray-100 space-y-1">
+                     <div className="flex justify-between text-[9px]">
+                        <span className="text-gray-400 font-bold uppercase">Tags per Sheet</span>
+                        <span className="font-mono font-bold text-maroon-dark">{tagsPerSheet}</span>
+                     </div>
+                     <div className="flex justify-between text-[9px]">
+                        <span className="text-gray-400 font-bold uppercase">A4 Sheets Needed</span>
+                        <span className="font-mono font-bold text-maroon-dark">{sheetCount}</span>
+                     </div>
+                     <div className="flex justify-between text-[9px]">
+                        <span className="text-gray-400 font-bold uppercase">PDF Pages</span>
+                        <span className="font-mono font-bold text-maroon-dark">{pdfPageCount}</span>
+                     </div>
+                     <div className="flex justify-between text-[9px]">
+                        <span className="text-gray-400 font-bold uppercase">Tag Range</span>
+                        <span className="font-mono font-bold text-maroon-dark">#{tagNumber} – #{tagNumber + totalTagsToPrint - 1}</span>
+                     </div>
+                  </div>
+               </div>
+
+               <div className="bg-blue-50/60 border border-blue-100 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                     <Layers size={13} className="text-blue-700" />
+                     <label className="text-[9px] font-bold uppercase tracking-widest text-blue-900">A4 Sheets to Generate</label>
+                  </div>
+                  <div className="flex items-center gap-3">
+                     <button
+                       onClick={() => setTotalTagsToPrint(prev => Math.max(tagsPerSheet, (sheetCount - 1) * tagsPerSheet))}
+                       className="w-8 h-8 rounded-lg bg-white border border-blue-200 text-blue-900 font-bold text-sm hover:border-blue-500 transition-colors flex items-center justify-center"
+                     >âˆ’</button>
+                     <input
+                       type="number"
+                       min={1}
+                       max={999}
+                       value={sheetCount}
+                       onChange={(e) => {
+                         const val = parseInt(e.target.value) || 1;
+                         setTotalTagsToPrint(Math.max(1, val) * tagsPerSheet);
+                       }}
+                       className="flex-1 text-center bg-white border border-blue-200 rounded-lg p-2 text-[13px] font-mono font-bold text-blue-900 focus:ring-2 focus:ring-blue-200 outline-none"
+                     />
+                     <button
+                       onClick={() => setTotalTagsToPrint((sheetCount + 1) * tagsPerSheet)}
+                       className="w-8 h-8 rounded-lg bg-white border border-blue-200 text-blue-900 font-bold text-sm hover:border-blue-500 transition-colors flex items-center justify-center"
+                     >+</button>
+                  </div>
+                  <p className="text-[10px] text-blue-900/80 leading-relaxed">
+                    {sheetCount} sheet{sheetCount > 1 ? 's' : ''} x {tagsPerSheet} tag{tagsPerSheet > 1 ? 's' : ''} = {totalTagsToPrint} total tags.
+                    {printLayout === '1' ? ` PDF will contain ${pdfPageCount} page${pdfPageCount > 1 ? 's' : ''}.` : ` PDF will contain ${sheetCount} front page${sheetCount > 1 ? 's' : ''} and ${sheetCount} back page${sheetCount > 1 ? 's' : ''}.`}
+                  </p>
+               </div>
+
                <div className="space-y-2">
-                  <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Sheet Layout</label>
+                  <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Tags per Sheet (Layout)</label>
                   <div className="grid grid-cols-4 gap-2">
                      {['1', '4', '6', '8'].map(l => (
                        <button 
                         key={l}
-                        onClick={() => setPrintLayout(l as PrintLayout)}
+                        onClick={() => {
+                          setPrintLayout(l as PrintLayout);
+                          const newCount = getPrintLayoutSpec(l as PrintLayout).count;
+                          setTotalTagsToPrint(sheetCount * newCount);
+                        }}
                         className={`py-2 rounded border text-[10px] font-bold ${printLayout === l ? 'bg-maroon-dark text-white border-maroon-dark' : 'bg-white text-gray-400 border-gray-100'}`}
                        >{l} Up</button>
                      ))}
@@ -1144,7 +1208,7 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                        onClick={() => setDuplexMode('long-edge')}
                        className={`py-2 rounded-lg text-[9px] font-bold border transition-all ${duplexMode === 'long-edge' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-500 border-gray-200 hover:border-blue-400'}`}
                      >
-                       Long Edge Flip (Standard)
+                       Long Edge Flip
                      </button>
                      <button 
                        onClick={() => setDuplexMode('short-edge')}
@@ -1153,68 +1217,19 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                        Short Edge Flip
                      </button>
                   </div>
-                  <p className="text-[8px] text-blue-500/80 leading-relaxed font-medium mt-1">
-                     {duplexMode === 'long-edge' ? 'Mirrors columns on the back page.' : 'Mirrors rows on the back page.'}
-                  </p>
                </div>
 
                <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 space-y-3">
                   <div className="flex items-center justify-between">
                      <div className="flex items-center gap-2">
                         <Settings2 size={12} className="text-orange-500" />
-                        <span className="text-[8px] font-bold uppercase text-orange-700">Back-Side Offset Correction</span>
-                     </div>
-                     {(backOffsetX !== 0 || backOffsetY !== 0) && (
-                       <button onClick={() => { setBackOffsetX(0); setBackOffsetY(0); }} className="text-[7px] text-gray-400 hover:text-red-500 font-bold uppercase border border-gray-200 rounded px-1 transition-colors">
-                         Reset
-                       </button>
-                     )}
-                  </div>
-                  <div className="space-y-2">
-                     <div className="flex items-center justify-between">
-                        <span className="text-[8px] font-bold uppercase text-orange-700">Horizontal</span>
-                        <span className={`text-[9px] font-mono font-bold ${backOffsetX === 0 ? 'text-gray-400' : backOffsetX > 0 ? 'text-orange-600' : 'text-blue-600'}`}>
-                          {backOffsetX > 0 ? '+' : ''}{backOffsetX.toFixed(1)} mm
-                        </span>
-                     </div>
-                     <input
-                       type="range"
-                       min="-5"
-                       max="5"
-                       step="0.1"
-                       value={backOffsetX}
-                       onChange={(e) => setBackOffsetX(parseFloat(e.target.value))}
-                       className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-orange-500"
-                     />
-                     <div className="flex justify-between text-[6px] text-gray-400 font-mono">
-                       <span>-5mm (left)</span>
-                       <span>0</span>
-                       <span>+5mm (right)</span>
+                        <span className="text-[8px] font-bold uppercase text-orange-700">Offset Correction</span>
                      </div>
                   </div>
                   <div className="space-y-2">
-                     <div className="flex items-center justify-between">
-                        <span className="text-[8px] font-bold uppercase text-orange-700">Vertical</span>
-                        <span className={`text-[9px] font-mono font-bold ${backOffsetY === 0 ? 'text-gray-400' : backOffsetY > 0 ? 'text-orange-600' : 'text-blue-600'}`}>
-                          {backOffsetY > 0 ? '+' : ''}{backOffsetY.toFixed(1)} mm
-                        </span>
-                     </div>
-                     <input
-                       type="range"
-                       min="-5"
-                       max="5"
-                       step="0.1"
-                       value={backOffsetY}
-                       onChange={(e) => setBackOffsetY(parseFloat(e.target.value))}
-                       className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-orange-500"
-                     />
-                     <div className="flex justify-between text-[6px] text-gray-400 font-mono">
-                       <span>-5mm (up)</span>
-                       <span>0</span>
-                       <span>+5mm (down)</span>
-                     </div>
+                     <input type="range" min="-5" max="5" step="0.1" value={backOffsetX} onChange={(e) => setBackOffsetX(parseFloat(e.target.value))} className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-orange-500" />
+                     <input type="range" min="-5" max="5" step="0.1" value={backOffsetY} onChange={(e) => setBackOffsetY(parseFloat(e.target.value))} className="w-full h-1.5 rounded-full appearance-none cursor-pointer accent-orange-500" />
                   </div>
-                  <p className="text-[7px] text-orange-500/80 font-medium">These corrections shift the back sheet only, and the preview overlay now matches the exported PDF.</p>
                </div>
                
                <div className="flex items-center justify-between p-3 border border-gray-100 rounded-xl bg-gray-50">
@@ -1233,6 +1248,7 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
           )}
         </div>
 
+        {/* Bottom Action Bar */}
         <div className="p-4 border-t border-gray-50 space-y-2">
            <button 
             onClick={handleSaveTemplate}
@@ -1259,13 +1275,14 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
               ) : (
                 <Download size={16} />
               )}
-              {isGeneratingPdf ? 'Generating PDF...' : 'Export High-Res PDF'}
+              {isGeneratingPdf
+                ? `Generating... (${totalTagsToPrint} tags)`
+                : `Export ${totalTagsToPrint} Tags PDF`}
            </button>
         </div>
       </div>
 
-      {/* Main Area */}
-
+      {/* Main Canvas Area */}
       <div className="flex-1 flex flex-col items-center overflow-auto bg-gray-50/50">
          {viewMode === 'editor' ? (
            <>
@@ -1276,7 +1293,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                     </div>
                     <span className="text-[9px] text-gray-400 font-medium">Click a card below to target design tools</span>
                   </div>
-
                   <div className="flex items-center gap-4">
                     <div className="text-right hidden md:block">
                       <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">Tag ID Sequence</p>
@@ -1291,7 +1307,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
               </div>
 
               <div className="flex-1 flex flex-col xl:flex-row items-center justify-center w-full p-8 gap-12 min-h-0 overflow-auto">
-                  {/* Front Side */}
                   <div className="group relative flex flex-col items-center gap-4">
                     <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Front Face</h4>
                     <div 
@@ -1301,7 +1316,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                     >
                       <canvas ref={frontCanvasRef} />
                       <div className="absolute inset-4 border border-dashed border-maroon-dark/5 pointer-events-none z-30"></div>
-                      
                       {isUploading.front && (
                         <div className="absolute inset-0 z-40 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
                            <RefreshCw className="text-maroon-dark animate-spin" size={32} />
@@ -1311,7 +1325,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                     </div>
                   </div>
 
-                  {/* Back Side */}
                   <div className="group relative flex flex-col items-center gap-4">
                     <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Back Face</h4>
                     <div 
@@ -1321,7 +1334,6 @@ export default function TagDesigner({ onSave }: TagDesignerProps) {
                     >
                       <canvas ref={backCanvasRef} />
                       <div className="absolute inset-4 border border-dashed border-maroon-dark/5 pointer-events-none z-30"></div>
-                      
                       {isUploading.back && (
                         <div className="absolute inset-0 z-40 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
                            <RefreshCw className="text-maroon-dark animate-spin" size={32} />

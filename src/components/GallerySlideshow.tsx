@@ -3,12 +3,16 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ChevronLeft, ChevronRight, Camera, ExternalLink } from 'lucide-react';
 import { type GalleryImage } from '../services/imageService';
 import { Link } from 'react-router-dom';
-import { useLiveGallery } from '../hooks/useLiveGallery';
+import { parseCategory } from '../lib/galleryHelper';
 
 const SLIDE_INTERVAL = 4000; // ms per slide
 
-export default function GallerySlideshow() {
-  const { images: liveImages, loading } = useLiveGallery('all');
+interface GallerySlideshowProps {
+  images: GalleryImage[];
+  loading: boolean;
+}
+
+export default function GallerySlideshow({ images: liveImages, loading }: GallerySlideshowProps) {
   const [images, setImages] = useState<GalleryImage[]>([]);
   const [current, setCurrent] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -17,7 +21,7 @@ export default function GallerySlideshow() {
   useEffect(() => {
     const shuffled = [...liveImages].sort(() => Math.random() - 0.5);
     setImages(shuffled);
-    setCurrent((value) => (shuffled.length === 0 ? 0 : Math.min(value, shuffled.length - 1)));
+    setCurrent(0);
   }, [liveImages]);
 
   // Auto-advance
@@ -92,7 +96,7 @@ export default function GallerySlideshow() {
               className="absolute bottom-8 left-8"
             >
               <span className="px-4 py-1.5 rounded-full bg-gold-metallic/20 backdrop-blur-sm border border-gold-metallic/30 text-gold-metallic text-[10px] font-bold uppercase tracking-widest capitalize">
-                {images[current].folder}
+                {parseCategory(images[current].folder).folder}
               </span>
             </motion.div>
           </AnimatePresence>

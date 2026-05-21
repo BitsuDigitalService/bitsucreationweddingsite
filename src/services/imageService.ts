@@ -295,3 +295,213 @@ export const imageService = {
       .subscribe();
   },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gallery Videos (Reels)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface GalleryVideo {
+  id?: string;
+  name: string;
+  url: string;
+  folder: string;
+  path: string;
+  thumbnailUrl?: string;
+  title?: string;
+  created_at?: string;
+}
+
+const VIDEO_ROOT = 'gallery/videos';
+const MAX_VIDEO_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB (Supabase free tier limit)
+
+/** Capture the first video frame as a base64 JPEG thumbnail (client-side). */
+export async function captureVideoThumbnail(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+
+    const objectUrl = URL.createObjectURL(file);
+    video.src = objectUrl;
+
+    const cleanup = () => URL.revokeObjectURL(objectUrl);
+
+    video.addEventListener('loadeddata', () => {
+      video.currentTime = 0.5; // seek 0.5s in for a better frame
+    });
+
+    video.addEventListener('seeked', () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 360;
+        canvas.height = video.videoHeight || 640;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { cleanup(); resolve(null); return; }
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        cleanup();
+        resolve(dataUrl);
+      } catch {
+        cleanup();
+        resolve(null);
+      }
+    });
+
+    video.addEventListener('error', () => { cleanup(); resolve(null); });
+
+    // Timeout safety
+    setTimeout(() => { cleanup(); resolve(null); }, 8000);
+  });
+}
+
+export const videoService = {
+
+  /** Upload a video file + auto-captured thumbnail → storage + DB. */
+  async uploadGalleryVideo(
+    file: File,
+    folder: string,
+    title?: string,
+  ): Promise<GalleryVideo | null> {
+    if (file.size > MAX_VIDEO_SIZE_BYTES) {
+      console.error('Video exceeds 50 MB limit');
+      return null;
+    }
+
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    await ensureBucket();
+
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? 'mp4';
+    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const filePath = `${VIDEO_ROOT}/${folder}/${fileName}`;
+
+    const { error } = await supabase.storage.from(BUCKET).upload(filePath, file, {
+      contentType: file.type,
+      upsert: false,
+    });
+    if (error) { console.error('Video upload error:', error); return null; }
+
+    const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
+    const publicUrl = urlData.publicUrl;
+
+    // Capture thumbnail client-side
+    let thumbnailUrl: string | undefined;
+    try {
+      const dataUrl = await captureVideoThumbnail(file);
+      if (dataUrl) {
+        // Upload thumbnail as JPEG
+        const thumbRes = await fetch(dataUrl);
+        const thumbBlob = await thumbRes.blob();
+        const thumbPath = `${VIDEO_ROOT}/${folder}/thumb_${fileName.replace(/\.\w+$/, '')}.jpg`;
+        const { error: thumbErr } = await supabase.storage
+          .from(BUCKET)
+          .upload(thumbPath, thumbBlob, { contentType: 'image/jpeg', upsert: false });
+        if (!thumbErr) {
+          const { data: tUrl } = supabase.storage.from(BUCKET).getPublicUrl(thumbPath);
+          thumbnailUrl = tUrl.publicUrl;
+        }
+      }
+    } catch (e) {
+      console.warn('Thumbnail capture failed (non-fatal):', e);
+    }
+
+    // Persist to DB
+    try {
+      await supabase.from('gallery_videos').insert({
+        url: publicUrl,
+        storage_path: filePath,
+        category: folder,
+        file_name: fileName,
+        thumbnail_url: thumbnailUrl ?? null,
+        title: title ?? null,
+      });
+    } catch (e) {
+      console.warn('gallery_videos DB insert failed (run VIDEO_MIGRATION.sql):', e);
+    }
+
+    return {
+      name: fileName,
+      url: publicUrl,
+      folder,
+      path: filePath,
+      thumbnailUrl,
+      title,
+    };
+  },
+
+  /** Fetch all videos (optionally filtered by folder). */
+  async getGalleryVideos(folder: string = 'all'): Promise<GalleryVideo[]> {
+    const supabase = getSupabase();
+    if (!supabase) return [];
+
+    try {
+      let query = supabase
+        .from('gallery_videos')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (folder !== 'all') {
+        query = query.eq('category', folder);
+      }
+
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        return data.map((row: any) => ({
+          id: row.id,
+          name: row.file_name,
+          url: row.url,
+          folder: row.category,
+          path: row.storage_path,
+          thumbnailUrl: row.thumbnail_url,
+          title: row.title,
+          created_at: row.created_at,
+        }));
+      }
+    } catch (_) { /* ignored */ }
+
+    return [];
+  },
+
+  /** Delete a video from storage + DB. */
+  async deleteGalleryVideo(path: string, id?: string): Promise<boolean> {
+    const supabase = getSupabase();
+    if (!supabase) return false;
+
+    // Also remove thumbnail if stored in the same bucket
+    const thumbPath = path.replace(/(\.\w+)$/, '').replace(/([^/]+)$/, 'thumb_$1') + '.jpg';
+    try {
+      await supabase.storage.from(BUCKET).remove([path, thumbPath]);
+    } catch (_) { /* ignore */ }
+
+    try {
+      const query = supabase.from('gallery_videos').delete();
+      const { error } = id
+        ? await query.eq('id', id)
+        : await query.eq('storage_path', path);
+      if (error) console.error('Video DB delete error:', error);
+      else return true;
+    } catch (e) {
+      console.error('Video delete exception:', e);
+    }
+
+    return false;
+  },
+
+  /** Real-time subscription to gallery_videos table changes. */
+  subscribeToVideoChanges(onChange: () => void) {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+
+    const channelName = `gallery-video-changes-${Math.random().toString(36).slice(2)}`;
+
+    return supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'gallery_videos' },
+        () => onChange(),
+      )
+      .subscribe();
+  },
+};
